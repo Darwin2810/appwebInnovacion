@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -100,7 +101,21 @@ class Client {
   async wait(expression, description, timeout = 20000) {
     const until = Date.now() + timeout
     while (Date.now() < until) { if (await this.evaluate(`Boolean(${expression})`)) return; await pause(75) }
-    throw new Error(`${this.name}: timed out: ${description}`)
+    let diagnostics
+    try {
+      diagnostics = await this.evaluate(`({
+        path: location.pathname,
+        readyState: document.readyState,
+        dialog: document.querySelector('[role="dialog"]')?.innerText.slice(0, 3000) || null,
+        alerts: [...document.querySelectorAll('[role="alert"]')].map(el=>el.textContent.trim()).slice(-5),
+        qrStatuses: [...document.querySelectorAll('.qr-status')].map(el=>el.textContent.trim()),
+        qrErrors: [...document.querySelectorAll('.qr-error')].map(el=>el.textContent.trim()),
+        qrCanvases: [...document.querySelectorAll('.qr-video canvas')].map(el=>({width:el.width,height:el.height,clientWidth:el.clientWidth,clientHeight:el.clientHeight})),
+        fileInput: (()=>{const el=document.querySelector('input[aria-label="Seleccionar imagen del QR"]');return el ? {disabled:el.disabled,accept:el.accept} : null})(),
+        serviceWorker: {controlled: Boolean(navigator.serviceWorker?.controller), state:navigator.serviceWorker?.controller?.state || null},
+      })`)
+    } catch (error) { diagnostics = { error: error.message } }
+    throw new Error(`${this.name}: timed out: ${description}\nDiagnostics: ${JSON.stringify({ ...diagnostics, lastQrFile: this.lastQrFile || null })}`)
   }
   async set(label, value) { await this.evaluate(`qaSet(${JSON.stringify(label)},${JSON.stringify(String(value))})`); await pause(30) }
   async click(text) { await this.evaluate(`qaClick(${JSON.stringify(text)})`); await pause(60) }
@@ -134,6 +149,8 @@ class Client {
     await this.checkbox('Ingreso directo: sumar 1 unidad si el producto ya existe', quickReceive)
   }
   async uploadQr(filename) {
+    const bytes = await readFile(filename)
+    this.lastQrFile = { name: path.basename(filename), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
     const input = await this.evaluate(`qaControl('Seleccionar imagen del QR')`, false)
     if (!input.objectId) throw new Error('QR file control is missing')
     await this.request('DOM.setFileInputFiles', { files: [filename], objectId: input.objectId })

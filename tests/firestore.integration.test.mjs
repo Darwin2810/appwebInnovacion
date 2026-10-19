@@ -16,11 +16,16 @@ import {
   getDocs,
   onSnapshot,
   query,
+  setLogLevel,
   setDoc,
   updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore'
+
+// Permission denials below are assertions, not application failures. Keep the
+// runner's actual failing test diagnostics visible in CI's bounded log summary.
+setLogLevel('silent')
 
 const privateCollections = [
   'costs', 'journals', 'commands', 'audit', 'sales', 'purchases',

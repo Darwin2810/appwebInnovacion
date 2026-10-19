@@ -17,7 +17,8 @@
     "deploy": "npm run build && node scripts/firebase.mjs deploy --only functions,firestore,hosting",
     "install:backend": "npm ci --prefix functions",
     "deploy:backend": "node scripts/firebase.mjs deploy --only functions,firestore",
-    "deploy:hosting": "npm run build && node scripts/firebase.mjs deploy --only hosting"
+    "deploy:hosting": "npm run build && node scripts/firebase.mjs deploy --only hosting",
+    "test:setup": "node scripts/ci-browser.mjs --setup-smoke"
   },
   "dependencies": {
     "firebase": "13.0.0",

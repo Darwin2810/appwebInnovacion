@@ -75,7 +75,7 @@ No se permiten escrituras de negocio desde el SDK del navegador, tampoco al admi
 4. Si el SKU no existe, se rellena el formulario. Revisa y pulsa **Guardar producto** para registrar realmente.
 5. Si ya existe, el QR abre ingreso de stock; la opción de ingreso directo suma una unidad. No sobrescribe el precio, nombre ni stock actual con una etiqueta antigua.
 
-En **Referencia y variantes** puedes preparar un QR por cada fila antes de guardar todas. Cada variante tiene SKU, talla/color/lote y stock propios. El nombre y la referencia son comunes. Los QR no contienen costos privados, roles, datos personales ni instrucciones de pago.
+En **Varias tallas y colores** puedes preparar un QR por cada fila antes de guardar todas. Cada variante tiene SKU, talla/color/lote y stock propios. El nombre y la referencia son comunes. Los QR no contienen costos privados, roles, datos personales ni instrucciones de pago.
 
 Ejemplo del contenido (los importes del QR son COP, no centavos; la API los convierte al modelo entero):
 

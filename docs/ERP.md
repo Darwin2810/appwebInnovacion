@@ -140,7 +140,7 @@ La actualización no transforma ni borra automáticamente `products`. Durante la
 5. Confirma y verifica variantes, cantidades y movimientos; continúa con los demás lotes.
 6. Valora los costos que falten y concilia con el conteo físico.
 
-Se mantiene el ID original para las etiquetas por ID y se conservan los SKU. Si el SKU anterior estaba vacío se genera `LEGACY-…`; una referencia vacía obtiene `LEG-…`. Ambos son estables y deben revisarse. Los precios anteriores en COP se convierten a centavos; **no se convierten en costos**.
+Se mantiene el ID original para las etiquetas por ID y se conservan los SKU. Si el SKU anterior estaba vacío se genera `LEGACY-…`. En la interfaz debes escribir una referencia válida cuando falte o sea incompatible; la API también admite generar `LEG-…` cuando se omite una referencia anterior vacía. Los códigos generados son estables y deben revisarse. Los precios anteriores en COP se convierten a centavos; **no se convierten en costos**.
 
 Dos filas anteriores con una misma combinación de referencia/talla/color/lote, o un SKU ocupado, rechazan el lote sin sobrescribir. Corrige la asignación y reintenta. Un ID ya migrado se omite; se conservan el documento anterior y el registro de migración.
 
