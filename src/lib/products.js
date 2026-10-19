@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore'
+import { collection, doc, getDoc, increment, runTransaction, serverTimestamp } from 'firebase/firestore'
 import { firebaseState } from './firebase.js'
 import { normalizeProduct, normalizeSku, skuDocumentKey } from './productModel.js'
 
@@ -33,6 +33,9 @@ export function createProductRepository(db, companyId = 'exlaider-jeans') {
   async function updateProduct(uid, id, input) {
     assertUser(uid)
     const product = normalizeProduct(input)
+    // Metadata edits must never write the stock value read by an earlier
+    // transaction attempt. An unrelated receipt may have already increased it.
+    delete product.stock
     const ref = productRef(id)
     await runTransaction(db, async (transaction) => {
       const previous = await transaction.get(ref)
@@ -45,7 +48,7 @@ export function createProductRepository(db, companyId = 'exlaider-jeans') {
       }
       if (changed && current.skuKey) transaction.delete(indexRef(current.sku))
       if (changed && product.skuKey) transaction.set(indexRef(product.sku), { productId: id, skuKey: product.skuKey, createdAt: serverTimestamp() })
-      transaction.update(ref, { ...product, stock: current.stock, updatedBy: uid, updatedAt: serverTimestamp() })
+      transaction.update(ref, { ...product, updatedBy: uid, updatedAt: serverTimestamp() })
     })
   }
 
@@ -70,7 +73,10 @@ export function createProductRepository(db, companyId = 'exlaider-jeans') {
       if (!snapshot.exists()) throw new Error('No se encontró el producto del código QR.')
       const stock = snapshot.data().stock + quantity
       if (!Number.isSafeInteger(stock) || stock > 1e9) throw new Error('El ingreso supera el stock máximo permitido.')
-      transaction.update(ref, { stock, updatedAt: serverTimestamp(), updatedBy: uid })
+      // Apply the positive delta on the server. Rules evaluate the transformed
+      // stock against the latest document, so a concurrent receipt cannot make
+      // an otherwise valid transaction look like an attempted stock decrease.
+      transaction.update(ref, { stock: increment(quantity), updatedAt: serverTimestamp(), updatedBy: uid })
       return stock
     })
   }
