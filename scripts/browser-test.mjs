@@ -222,7 +222,7 @@ try {
   if (setupSmoke) {
     await check('Unconfigured production app renders a clear Firebase setup screen on desktop and mobile', async () => {
       for (const page of [desktop, mobile]) {
-        await page.wait(`document.body.textContent.includes('Conecta EXLAIDER a Firebase')`, 'actual setup screen')
+        await page.wait(`document.body?.textContent.includes('Conecta EXLAIDER a Firebase')`, 'actual setup screen')
         assert.equal(await page.evaluate(`!!document.querySelector('[role="alert"]') && !qaButton('Añadir producto')`), true)
       }
     })
@@ -244,7 +244,7 @@ try {
       try {
         await desktop.request('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 })
         await desktop.request('Page.reload')
-        await desktop.wait(`document.body.textContent.includes('Conecta EXLAIDER a Firebase')`, 'cached public interface renders offline')
+        await desktop.wait(`document.body?.textContent.includes('Conecta EXLAIDER a Firebase')`, 'cached public interface renders offline')
         assert.equal(await desktop.evaluate('navigator.onLine'), false)
       } finally {
         await desktop.request('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
@@ -421,6 +421,7 @@ try {
     const saleDoc = (await collection('sales')).find(item => item.name.endsWith(`/${saleId}`))
     assert.equal(field(saleDoc, 'paidCents'), 10000000)
     await desktop.set(`Motivo de anulación de ${saleId}`, 'Reversión de la venta sintética E2E.')
+    await desktop.evaluate(`(()=>{const checkbox=document.querySelector('form[aria-label="Anular venta"] input[type="checkbox"]');if(!checkbox||!checkbox.required)throw new Error('Missing explicit refund confirmation');checkbox.click();if(!checkbox.checked)throw new Error('Refund confirmation did not register')})()`)
     await desktop.click('Confirmar anulación')
     await mobile.stockSku(variants[0].sku, 6)
     await viewerPage.stockSku(variants[0].sku, 6)

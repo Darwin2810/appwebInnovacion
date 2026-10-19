@@ -109,7 +109,7 @@ Si todos los campos exceden la capacidad del QR, un borrador solicita acortar la
 
 Abre el sitio **HTTPS** directamente en Safari o el navegador principal; evita navegadores dentro de redes sociales. Permite la cámara para el sitio en los controles del navegador. Si la denegaste, cambia el permiso y vuelve a abrir el lector. Selecciona la cámara trasera; otra aplicación puede tenerla ocupada.
 
-El lector incluye vídeo inline, selección de cámaras y detención al cerrar. Enumera dispositivos sin abrir una segunda transmisión que pueda interrumpir el vídeo en iOS. **Leer imagen QR** permite escanear una foto/PNG como alternativa. Las pruebas de navegador no sustituyen la validación con un iPhone físico. `http://192.168...` no es un contexto seguro para cámara; `localhost` sólo funciona en el propio dispositivo.
+El lector incluye vídeo inline, selección de cámaras y detención al cerrar. Enumera dispositivos sin abrir una segunda transmisión que pueda interrumpir el vídeo en iOS. **Leer imagen QR** permite escanear una foto/PNG como alternativa; si ZXing no detecta una matriz densa válida, un segundo decodificador de píxeles la comprueba sin abrir enlaces. Las pruebas de navegador no sustituyen la validación con un iPhone físico. `http://192.168...` no es un contexto seguro para cámara; `localhost` sólo funciona en el propio dispositivo.
 
 ## Emuladores y verificación
 

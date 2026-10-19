@@ -11,7 +11,7 @@
     "dev:emulator": "vite --mode emulator",
     "emulators": "node scripts/firebase.mjs emulators:start --project demo-inventario --only auth,firestore,functions",
     "firebase": "node scripts/firebase.mjs",
-    "test": "node --test tests/productModel.test.mjs tests/qr.test.mjs tests/core.test.mjs tests/catalog.unit.test.mjs tests/deployGuard.test.mjs",
+    "test": "node --test tests/productModel.test.mjs tests/qr.test.mjs tests/core.test.mjs tests/catalog.unit.test.mjs tests/deployGuard.test.mjs tests/qrImage.test.mjs",
     "test:cloud": "node scripts/firebase.mjs emulators:exec --project demo-inventario --only auth,firestore \"node --test tests/firestore.integration.test.mjs tests/erp.integration.test.mjs\"",
     "test:browser": "node scripts/firebase.mjs emulators:exec --project demo-inventario --only auth,firestore,functions \"node scripts/ci-browser.mjs\"",
     "deploy": "npm run build && node scripts/firebase.mjs deploy --only functions,firestore,hosting",
@@ -23,6 +23,7 @@
   "dependencies": {
     "firebase": "13.0.0",
     "html5-qrcode": "2.3.8",
+    "jsqr": "1.4.0",
     "qrcode": "1.5.4",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

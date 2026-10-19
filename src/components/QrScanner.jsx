@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
+import { readQrImage } from '../lib/qrImage'
 
 function cameraError(error) {
   const message = `${error?.name || ''} ${error?.message || error || ''}`
@@ -161,7 +162,8 @@ export default function QrScanner({ onScan, onClose }) {
         await stopCamera()
         if (!mountedRef.current || !scannerRef.current) return null
         scannerRef.current.clear()
-        return scannerRef.current.scanFile(file, true)
+        try { return await scannerRef.current.scanFile(file, true) }
+        catch { return readQrImage(file) }
       })
     } catch {
       if (mountedRef.current) {
