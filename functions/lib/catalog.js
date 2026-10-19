@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { FieldPath } from 'firebase-admin/firestore'
 import { fail, text, integer, money, key, codeKey, nameKey, ref, meta, created, mulCents, proportion, journal } from './core.js'
 
 const MAX_LINES = 20
@@ -195,6 +196,37 @@ async function legacyReservations(tx, ctx, skuKeys) {
   return new Map(legacyIndices.flatMap((snapshot, index) => snapshot.exists && !migratedIds.has(snapshot.data().productId) ? [[skuKeys[index], snapshot.data().productId]] : []))
 }
 
+async function assertLegacyReference(tx, ctx, incoming, migratingIds = new Set()) {
+  // Legacy documents do not have a normalized-reference index. Read a small
+  // projection in bounded pages rather than matching a few letter cases and
+  // missing mixed-case/NFKC equivalents. Old copies whose v2 variant exists
+  // no longer reserve their old name: a canonical rename must stay possible.
+  const targets = Array.isArray(incoming) ? incoming : [incoming]
+  if (!targets.length) return
+  const byCode = new Map(targets.map(item => [item.code.normalize('NFKC').trim().toLowerCase(), item]))
+  const source = ctx.org.collection('products').orderBy(FieldPath.documentId()).select('reference', 'name').limit(200)
+  let cursor
+  while (true) {
+    const page = await tx.get(cursor ? source.startAfter(cursor) : source)
+    const candidates = page.docs.flatMap(snapshot => {
+      const old = snapshot.data()
+      const target = typeof old.reference === 'string' ? byCode.get(old.reference.normalize('NFKC').trim().toLowerCase()) : undefined
+      return !migratingIds.has(snapshot.id) && target ? [{ snapshot, target }] : []
+    })
+    const variants = await readAll(tx, candidates.map(item => ref(ctx, 'variants', item.snapshot.id)))
+    for (let index = 0; index < candidates.length; index++) {
+      if (variants[index].exists) continue
+      const incoming = candidates[index].target
+      const legacyName = candidates[index].snapshot.data().name
+      if (typeof legacyName !== 'string' || !legacyName.trim()) fail('failed-precondition', 'Una referencia anterior pendiente tiene un nombre inválido. Revisa y migra ese registro antes de continuar.')
+      if (nameKey(legacyName) !== incoming.nameKey) fail('already-exists', `La referencia ${incoming.code} pertenece al producto anterior «${legacyName}», pendiente de migración. Migra o reasigna primero su referencia; no se pueden crear dos productos diferentes con la misma referencia.`)
+      if (incoming.kind !== 'finished' || incoming.unit !== 'unidad') fail('failed-precondition', `La referencia ${incoming.code} tiene productos anteriores pendientes en unidades. Migra o reasigna esos registros antes de usarla como materia prima.`)
+    }
+    if (page.size < 200) return
+    cursor = page.docs.at(-1)
+  }
+}
+
 async function createCatalog(tx, ctx, payload) {
   object(payload, 'El producto')
   const incoming = header(payload.reference)
@@ -214,10 +246,11 @@ async function createCatalog(tx, ctx, payload) {
   if (reference.exists) validateHeader(reference.data(), incoming.data)
   if (indices.some(snapshot => snapshot.exists)) fail('already-exists', 'El SKU o la combinación de talla, color y lote ya existe en el inventario.')
   if (legacy.size) fail('already-exists', `El SKU ${[...legacy.keys()][0]} pertenece a un producto anterior. Migra ese producto antes de añadir variantes.`)
+  await assertLegacyReference(tx, ctx, incoming.data)
   const referenceData = reference.exists ? reference.data() : incoming.data
   if (!reference.exists) tx.set(referenceRef, { ...incoming.data, ...created(ctx) })
   for (const item of inputs) {
-    const data = { ...item.fields, referenceKey: incoming.id, kind: referenceData.kind, stock: 0, active: true, ...created(ctx) }
+    const data = { ...item.fields, skuAliases: [], referenceKey: incoming.id, kind: referenceData.kind, stock: 0, active: true, ...created(ctx) }
     const costRef = ref(ctx, 'costs', item.ref.id)
     tx.set(item.ref, data)
     tx.set(costRef, { stockValueCents: 0, unvaluedQuantity: 0, ...meta(ctx) })
@@ -237,6 +270,7 @@ async function editReference(tx, ctx, payload) {
   const snapshot = await tx.get(referenceRef)
   if (!snapshot.exists) fail('not-found', 'La referencia no existe.')
   const name = text(payload.name, 'Nombre del producto', 100)
+  await assertLegacyReference(tx, ctx, { ...snapshot.data(), name, nameKey: nameKey(name) })
   tx.update(referenceRef, {
     name, nameKey: nameKey(name),
     category: text(payload.category ?? snapshot.data().category ?? 'General', 'Categoría', 60),
@@ -258,12 +292,15 @@ async function editVariant(tx, ctx, payload) {
   if (sku.exists && sku.data().variantId !== item.ref.id) fail('already-exists', 'Ese SKU ya pertenece a otra variante.')
   if (combination.exists && combination.data().variantId !== item.ref.id) fail('already-exists', 'Esa combinación de talla, color y lote ya existe para la referencia.')
   if (legacy.has(fields.skuKey) && legacy.get(fields.skuKey) !== item.ref.id) fail('already-exists', 'Ese SKU pertenece a un producto anterior pendiente de migración.')
-  if (item.data.skuKey !== fields.skuKey) tx.delete(indexRef(ctx, item.data.skuKey))
+  const skuAliases = [...new Set([...(item.data.skuAliases ?? []), ...(item.data.skuKey !== fields.skuKey ? [item.data.skuKey] : [])])].filter(value => value !== fields.skuKey)
+  if (skuAliases.length > 50) fail('failed-precondition', 'Esta variante ya conserva 50 SKU anteriores. Mantén su código para no perder la trazabilidad de las etiquetas.')
+  // Every previously printed SKU remains reserved to the same variant. Reusing
+  // it for another item would make an old label point at the wrong product.
   const oldCombination = combinationRef(ctx, item.data.referenceKey, item.data)
   if (oldCombination.id !== newCombination.id) tx.delete(oldCombination)
   tx.set(newIndex, { variantId: item.ref.id, ...created(ctx) })
   tx.set(newCombination, { variantId: item.ref.id, referenceKey: item.data.referenceKey, ...created(ctx) })
-  tx.update(item.ref, { ...fields, ...meta(ctx) })
+  tx.update(item.ref, { ...fields, skuAliases, ...meta(ctx) })
   return { id: item.ref.id }
 }
 
@@ -405,6 +442,8 @@ async function migrateLegacy(tx, ctx, payload) {
     }
   }
   if (skuSnapshots.some(snapshot => snapshot.exists) || combinationSnapshots.some(snapshot => snapshot.exists)) fail('already-exists', 'Un SKU o una combinación anterior ya está asignado. Revisa la referencia y los códigos; la migración no sobrescribe datos.')
+  const migratingIds = new Set(prepared.map(item => item.legacyId))
+  await assertLegacyReference(tx, ctx, [...headers.values()], migratingIds)
   for (let index = 0; index < headerIds.length; index++) {
     if (!headerSnapshots[index].exists) tx.set(ref(ctx, 'references', headerIds[index]), { ...headers.get(headerIds[index]), ...created(ctx) })
   }
@@ -413,7 +452,7 @@ async function migrateLegacy(tx, ctx, payload) {
     const costRef = ref(ctx, 'costs', item.legacyId)
     const referenceRef = ref(ctx, 'references', item.incoming.id)
     const referenceData = headers.get(item.incoming.id)
-    const data = { ...item.fields, referenceKey: item.incoming.id, kind: referenceData.kind, stock: 0, active: true, legacyId: item.legacyId, ...created(ctx) }
+    const data = { ...item.fields, skuAliases: [], referenceKey: item.incoming.id, kind: referenceData.kind, stock: 0, active: true, legacyId: item.legacyId, ...created(ctx) }
     tx.set(variantRef, data)
     tx.set(costRef, { stockValueCents: 0, unvaluedQuantity: 0, ...meta(ctx) })
     tx.set(indexRef(ctx, item.fields.skuKey), { variantId: item.legacyId, ...created(ctx) })

@@ -1,4 +1,5 @@
 import { cloneElement, isValidElement, useRef, useState } from 'react'
+import { requestId as newRequestId } from '../lib/erpApi.js'
 import './OperationsPanels.css'
 
 const currency = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -79,7 +80,7 @@ function ActionForm({ title, description, run, busy, action, getPayload, onDone,
     try {
       const payload = getPayload()
       const fingerprint = JSON.stringify({ action, payload })
-      if (!request.current || request.current.fingerprint !== fingerprint) request.current = { fingerprint, id: crypto.randomUUID() }
+      if (!request.current || request.current.fingerprint !== fingerprint) request.current = { fingerprint, id: newRequestId() }
       const result = await run(action, payload, request.current.id)
       request.current = null
       setNotice(`Operación confirmada en la nube.${result?.id ? ` Registro: ${result.id}` : ''}`)
@@ -104,7 +105,7 @@ function LineEditor({ lines, setLines, products, purchase = false, material = fa
   }
   return <div className="erp-lines" aria-label={material ? 'Materiales de la receta' : 'Líneas de productos'}>{lines.map((line, index) => <div className={`erp-line ${material ? 'erp-material-line' : ''}`} key={line.key}><ProductSelect label={`${material ? 'Material' : 'Variante'} ${index + 1}`} products={products} value={line.variantId} onChange={id => choose(index, id)} /><Field label={`${unitLabel} ${index + 1}`} type="number" min="1" max="1000000000" step="1" value={line.quantity} onChange={e => update(index, { quantity: e.target.value })} required />{!material && <MoneyField label={`${purchase ? 'Costo' : 'Precio'} unitario ${index + 1}`} value={line.amount} onChange={e => update(index, { amount: e.target.value })} />}<button type="button" className="secondary-button erp-remove" disabled={lines.length === 1} aria-label={`Quitar línea ${index + 1}`} onClick={() => setLines(current => current.filter((_, i) => i !== index))}>Quitar</button></div>)}<button className="secondary-button" type="button" disabled={lines.length >= 20} onClick={() => setLines(current => [...current, freshLine()])}>Añadir {material ? 'material' : 'línea'}</button><p className="erp-help">Máximo 20 líneas. Cada combinación de talla, color y lote tiene su propio stock.</p></div>
 }
-function freshLine() { return { key: crypto.randomUUID(), variantId: '', quantity: '1', amount: '0' } }
+function freshLine() { return { key: newRequestId(), variantId: '', quantity: '1', amount: '0' } }
 function estimateLines(lines) {
   return lines.reduce((total, line) => {
     try { return total + BigInt(units(line.quantity)) * BigInt(cents(line.amount)) }

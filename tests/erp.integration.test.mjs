@@ -157,6 +157,40 @@ describe('ERP transaccional: catálogo, permisos, dinero y trazabilidad', {
     await balancedLedger()
   })
 
+  test('cambiar SKU conserva alias e índices: etiquetas anteriores nunca apuntan a otro producto y se puede deshacer', async () => {
+    const item = await catalog()
+    const original = item.sku
+    const second = 'JEAN-100-AZ-32-V2'
+    const third = 'JEAN-100-AZ-32-V3'
+    const edit = (sku) => command('catalog.variant', {
+      variantId: item.id, sku, size: item.size, color: item.color, lot: item.lot,
+      priceCents: item.priceCents, minStock: item.minStock,
+    }, 'operator')
+    await edit(second)
+    assert.deepEqual((await read('variants', item.id)).skuAliases, [original.toLowerCase()])
+    assert.equal((await read('variantSkuIndex', `s_${original.toLowerCase()}`)).variantId, item.id)
+    await reject('catalog.create', {
+      reference: { code: 'ANOTHER-REFERENCE', name: 'Bermuda distinta', kind: 'finished', unit: 'unidad', category: 'Bermudas' },
+      variants: [{ sku: original, size: '', color: '', lot: '', stock: 0, priceCents: 1000, minStock: 0 }],
+    })
+    assert.equal((await rows('references')).length, 1, 'Un SKU anterior reservado no deja una referencia nueva parcial')
+    await edit(third)
+    assert.deepEqual(new Set((await read('variants', item.id)).skuAliases), new Set([original.toLowerCase(), second.toLowerCase()]))
+    await edit(second)
+    assert.equal((await read('variants', item.id)).sku, second)
+    assert.deepEqual(new Set((await read('variants', item.id)).skuAliases), new Set([original.toLowerCase(), third.toLowerCase()]))
+    await edit(original)
+    const restored = await read('variants', item.id)
+    assert.equal(restored.sku, original)
+    assert.deepEqual(new Set(restored.skuAliases), new Set([second.toLowerCase(), third.toLowerCase()]))
+    assert.equal(restored.stock, 10)
+    assert.equal((await read('costs', item.id)).stockValueCents, 10000)
+    for (const sku of [original, second, third]) {
+      assert.equal((await read('variantSkuIndex', `s_${sku.toLowerCase()}`)).variantId, item.id)
+    }
+    assert.equal((await rows('variants')).length, 1)
+  })
+
   test('comandos idempotentes: reintentar no suma dos veces y cambiar payload/actor con el mismo ID falla', async () => {
     const item = await catalog()
     const requestId = randomUUID()
@@ -438,6 +472,45 @@ describe('ERP transaccional: catálogo, permisos, dinero y trazabilidad', {
     assert.equal((await read('variants', 'legacy-one')).stock, 3)
     assert.equal((await read('costs', 'legacy-one')).stockValueCents, 15000)
     assert.equal((await read('costs', 'legacy-one')).unvaluedQuantity, 0)
+    await balancedLedger()
+  })
+
+  test('una referencia anterior sin migrar bloquea otro nombre; remapear libera el código sin colisiones con copias históricas', async () => {
+    const legacy = (reference, name, sku) => ({ reference, name, sku, category: 'Jeans', description: '', size: '32', color: 'Azul', lot: 'LOTE', imageUrl: '', price: 129900, stock: 3, minStock: 1, currency: 'COP' })
+    // Deliberately omit skuIndex: checking an old reference must not depend on
+    // whether that previous application version maintained its SKU registry.
+    const originalReference = '  ＬＥＧ－ＲＥＦ  '
+    await org.collection('products').doc('legacy-reserved').set(legacy(originalReference, 'Jeans Anterior', 'LEGACY-RESERVED'))
+    const incoming = {
+      reference: { code: 'leg-ref', name: 'Bermuda Nueva', category: 'Bermudas', kind: 'finished', unit: 'unidad' },
+      variants: [{ sku: 'NEW-DIFFERENT-SKU', size: 'M', color: 'Negro', lot: '', stock: 0, priceCents: 1000, minStock: 0 }],
+    }
+    await reject('catalog.create', incoming)
+    for (const collection of ['references', 'variants', 'commands', 'audit', 'journals']) {
+      assert.equal((await rows(collection)).length, 0, `El rechazo no deja datos parciales en ${collection}`)
+    }
+    await command('catalog.migrate', { items: [{ legacyId: 'legacy-reserved', referenceCode: 'LEG-OLD' }] })
+    await command('catalog.create', incoming)
+    assert.equal((await read('references', 'r_leg-ref')).name, 'Bermuda Nueva')
+    assert.equal((await read('variants', 'legacy-reserved')).referenceKey, 'r_leg-old')
+    assert.equal((await read('products', 'legacy-reserved')).reference, originalReference, 'Conserva la copia anterior original')
+
+    await org.collection('products').doc('legacy-renamed').set(legacy('LEG-SAME', 'Jeans Original', 'LEGACY-RENAMED'))
+    await command('catalog.create', {
+      reference: { code: 'LEG-SAME', name: 'Jeans Original', category: 'Jeans', kind: 'finished', unit: 'unidad' },
+      variants: [{ sku: 'PRE-MIGRATION-VARIANT', size: '36', color: 'Verde', lot: 'LOTE', stock: 0, priceCents: 1000, minStock: 0 }],
+    })
+    await reject('catalog.reference', { referenceKey: 'r_leg-same', name: 'Jeans Renombrado', category: 'Jeans', description: '', imageUrl: '' }, 'operator')
+    assert.equal((await read('references', 'r_leg-same')).name, 'Jeans Original', 'Un cambio de nombre no evade la referencia reservada por un producto pendiente de migrar')
+    await command('catalog.migrate', { items: [{ legacyId: 'legacy-renamed' }] })
+    await command('catalog.reference', { referenceKey: 'r_leg-same', name: 'Jeans Renombrado', category: 'Jeans', description: '', imageUrl: '' }, 'operator')
+    await command('catalog.create', {
+      reference: { code: 'leg-same', name: 'Jeans Renombrado', category: 'Jeans', kind: 'finished', unit: 'unidad' },
+      variants: [{ sku: 'RENAMED-SECOND', size: '34', color: 'Negro', lot: 'LOTE', stock: 0, priceCents: 1000, minStock: 0 }],
+    })
+    assert.equal((await read('products', 'legacy-renamed')).name, 'Jeans Original')
+    assert.equal((await rows('variants')).filter((item) => item.referenceKey === 'r_leg-same').length, 3)
+    assert.equal((await read('references', 'r_leg-same')).name, 'Jeans Renombrado')
     await balancedLedger()
   })
 

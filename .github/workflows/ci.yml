@@ -26,6 +26,8 @@ jobs:
       - run: node scripts/ci-check.mjs test:cloud
       - run: npm run build
         if: ${{ !cancelled() }}
+      - run: node scripts/ci-browser.mjs --setup-smoke
+        if: ${{ !cancelled() }}
       - run: npm run build -- --mode emulator
         if: ${{ !cancelled() }}
       - run: node scripts/ci-check.mjs test:browser

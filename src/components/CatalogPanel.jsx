@@ -1,8 +1,9 @@
-import { lazy, Suspense, useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useRef, useState } from 'react'
 import Modal from './Modal'
 import ProductForm from './ProductForm'
 import { normalizeProduct } from '../lib/productModel'
 import { parseProductQr } from '../lib/qr'
+import { requestId } from '../lib/erpApi.js'
 import './CatalogPanel.css'
 
 const QrScanner = lazy(() => import('./QrScanner'))
@@ -165,6 +166,7 @@ export default function CatalogPanel({ data, run, role, busy }) {
   const [search, setSearch] = useState(''), [category, setCategory] = useState('all'), [kind, setKind] = useState('all')
   const [showArchived, setShowArchived] = useState(false), [dialog, setDialog] = useState(null), [direct, setDirect] = useState(false)
   const [notice, setNotice] = useState(''), [error, setError] = useState(''), [working, setWorking] = useState(false)
+  const pendingCommand = useRef(null)
   const close = useCallback(() => setDialog(null), [])
   const writable = ['admin', 'operator'].includes(role)
   const canWrite = writable && !busy && !data.loading && !data.error && !data.fromCache && navigator.onLine
@@ -184,7 +186,7 @@ export default function CatalogPanel({ data, run, role, busy }) {
   const active = all.filter(product => product.active !== false)
   const categories = [...new Set(products.map(product => product.category || 'General'))].sort()
   const query = normalize(search.trim())
-  const visible = products.filter(product => (category === 'all' || (product.category || 'General') === category) && (kind === 'all' || (product.kind || 'finished') === kind) && normalize([product.name, product.sku, product.reference, product.size, product.color, product.lot, product.category].join(' ')).includes(query))
+  const visible = products.filter(product => (category === 'all' || (product.category || 'General') === category) && (kind === 'all' || (product.kind || 'finished') === kind) && normalize([product.name, product.sku, ...(Array.isArray(product.skuAliases) ? product.skuAliases : []), product.reference, product.size, product.color, product.lot, product.category].join(' ')).includes(query))
   const stats = [
     ['Referencias', number.format(new Set(active.map(product => product.referenceKey || identity(product.reference) || product.id)).size), 'Un producto por referencia'],
     ['Variantes', number.format(active.length), 'Tallas, colores y lotes activos'],
@@ -195,7 +197,14 @@ export default function CatalogPanel({ data, run, role, busy }) {
   if (role === 'admin') stats.push(['Valor al costo registrado', displayMoney((data.costs || []).reduce((total, cost) => total + (cost.stockValueCents || 0), 0) / 100), 'Privado · sin estimar costos desconocidos'])
   async function command(action, payload) {
     if (!canWrite) throw new Error('Espera la conexión con la nube para guardar. El QR sin guardar puede prepararse sin conexión.')
-    return run(action, payload)
+    const fingerprint = JSON.stringify({ action, payload })
+    if (!pendingCommand.current || pendingCommand.current.fingerprint !== fingerprint) pendingCommand.current = { fingerprint, id: requestId() }
+    const pending = pendingCommand.current
+    // Preserve the command identity after a failed or lost response. Retrying
+    // the same form must confirm the original operation, not duplicate it.
+    const result = await run(action, payload, pending.id)
+    if (pendingCommand.current === pending) pendingCommand.current = null
+    return result
   }
   async function saveProduct(product) {
     if (dialog.mode === 'edit') {
@@ -218,7 +227,7 @@ export default function CatalogPanel({ data, run, role, busy }) {
   async function scan(raw) {
     if (!canWrite) throw new Error('Espera la conexión con la nube para comprobar el QR.')
     const parsed = parseProductQr(raw)
-    const found = (parsed.id && all.find(product => product.id === parsed.id)) || (parsed.sku && all.find(product => identity(product.sku) === identity(parsed.sku)))
+    const found = (parsed.id && all.find(product => product.id === parsed.id)) || (parsed.sku && all.find(product => [product.sku, ...(Array.isArray(product.skuAliases) ? product.skuAliases : [])].some(sku => identity(sku) === identity(parsed.sku))))
     if (found) {
       if (found.legacy) throw new Error('Este producto pertenece al inventario anterior. Un administrador debe migrarlo antes de registrar movimientos.')
       if (found.active === false) throw new Error('Esta variante está archivada. Un administrador debe reactivarla antes de ingresar stock.')

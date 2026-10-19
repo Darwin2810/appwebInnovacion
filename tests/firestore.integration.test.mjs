@@ -12,6 +12,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
@@ -142,6 +143,18 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
       await assertFails(getDoc(doc(dbFor(role), path('members', 'admin'))))
       await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/members`)))
     }
+  })
+
+  test('una degradación de admin se aplica a lecturas futuras sin cambiar de sesión', async () => {
+    const adminDb = dbFor('admin')
+    await assertSucceeds(getDocFromServer(doc(adminDb, path('costs'))))
+    await assertSucceeds(getDocFromServer(doc(adminDb, path('sales'))))
+    await environment.withSecurityRulesDisabled((context) => updateDoc(doc(context.firestore(), path('members', 'admin')), { role: 'operator' }))
+    await assertFails(getDocFromServer(doc(adminDb, path('costs'))))
+    await assertFails(getDocFromServer(doc(adminDb, path('sales'))))
+    await assertFails(getDocs(collection(adminDb, `organizations/${company}/members`)))
+    await assertSucceeds(getDocFromServer(doc(adminDb, path('variants', 'finished'))))
+    await assertSucceeds(getDocFromServer(doc(adminDb, path('movements'))))
   })
 
   test('onSnapshot transmite a ambos dispositivos cambios autorizados realizados por el backend', async () => {

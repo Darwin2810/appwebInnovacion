@@ -348,7 +348,8 @@ try {
   })
   await check('A reference cannot be reused for a different product name', async () => {
     const conflictingSku = `QA-CONFLICT-${run}`
-    await assert.rejects(command(operator, 'catalog.create', { reference: { ...reference, name: `Producto diferente ${run}` }, variants: [{ ...variants[0], sku: conflictingSku, unitCostCents: 0 }] }), /referencia|nombre/i)
+    const variant = { sku: conflictingSku, size: '36', color: 'Rojo', lot: 'CI-CONFLICT', priceCents: variants[0].priceCents, stock: 1, minStock: 0 }
+    await assert.rejects(command(operator, 'catalog.create', { reference: { ...reference, name: `Producto diferente ${run}` }, variants: [variant] }), /referencia|nombre/i)
     assert.equal(await variantBySku(conflictingSku), null)
     for (const item of variants) await desktop.stockSku(item.sku, item.stock)
   })

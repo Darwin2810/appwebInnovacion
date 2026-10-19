@@ -2,6 +2,7 @@
   "functions": [{ "source": "functions", "codebase": "exlaider-erp", "runtime": "nodejs22" }],
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
   "hosting": {
+    "predeploy": ["node scripts/check-deploy.mjs"],
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [{ "source": "**", "destination": "/index.html" }],

@@ -45,6 +45,6 @@ export function useOrgData(user, member) {
     })
     const legacy = records.legacyProducts.filter(item => !variants.has(item.id) && item.kind !== 'material').map(item => ({ ...item, kind: 'finished', unit: 'unidad', legacy: true }))
     const products = [...migrated, ...legacy].sort((a, b) => String(a.name).localeCompare(String(b.name), 'es') || String(a.sku).localeCompare(String(b.sku), 'es'))
-    return { ...records, products, legacyProducts: legacy, loading: Boolean(session) && ['references', 'variants', 'legacyProducts'].some(name => !current.ready[name]), fromCache: ['references', 'variants', 'legacyProducts'].some(name => current.cache[name] !== false), error: Object.values(current.errors).filter(Boolean).join(' '), pendingWrites: false }
-  }, [state, session])
+    return { ...records, products, legacyProducts: legacy, loading: Boolean(session) && ['references', 'variants', 'legacyProducts'].some(name => !current.ready[name]), privateLoading: role === 'admin' && privateCollections.some(name => !current.ready[name] || current.cache[name] !== false), fromCache: ['references', 'variants', 'legacyProducts'].some(name => current.cache[name] !== false), error: Object.values(current.errors).filter(Boolean).join(' '), pendingWrites: false }
+  }, [state, session, role])
 }
