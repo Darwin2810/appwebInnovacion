@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import { makeProductQr } from '../lib/qr.js'
 
-export default function ProductQr({ product }) {
+export default function ProductQr({ product, draft = false }) {
   const [generated, setGenerated] = useState({ source: '', payload: '', image: '', error: '', compact: false })
   const [notice, setNotice] = useState('')
   let payload = ''
   let compactPayload = ''
   let payloadError = ''
   try {
-    payload = makeProductQr(product)
-    if (product.id) compactPayload = makeProductQr({ id: product.id, sku: product.sku })
+    payload = makeProductQr(draft ? { ...product, id: undefined } : product)
+    if (!draft && product.id) compactPayload = makeProductQr({ id: product.id, sku: product.sku })
   } catch (error) { payloadError = error.message }
   const current = generated.source === payload ? generated : null
   const image = current?.image || ''
@@ -31,13 +31,13 @@ export default function ProductQr({ product }) {
           const image = await QRCode.toDataURL(compactPayload, options)
           if (!cancelled) setGenerated({ source: payload, payload: compactPayload, image, error: '', compact: true })
         } catch {
-          if (!cancelled) setGenerated({ source: payload, payload: '', image: '', error: 'Hay demasiado texto para una imagen QR. Guarda primero el producto o reduce la descripción.', compact: false })
+          if (!cancelled) setGenerated({ source: payload, payload: '', image: '', error: draft ? 'El formulario contiene demasiado texto para un QR completo. Acorta la descripción o la URL de imagen y vuelve a generar el QR. El producto no se ha guardado.' : 'Hay demasiado texto para una imagen QR. Guarda primero el producto o reduce la descripción.', compact: false })
         }
       }
     }
     generate()
     return () => { cancelled = true }
-  }, [payload, compactPayload])
+  }, [payload, compactPayload, draft])
   async function copy() {
     try { await navigator.clipboard.writeText(effectivePayload); setNotice('Contenido del QR copiado.') } catch {
       setNotice('Despliega el contenido del QR para copiarlo manualmente.')
@@ -45,7 +45,7 @@ export default function ProductQr({ product }) {
   }
   return (
     <div className="qr-preview">
-      <p className="qr-guidance">Escanea este QR en otro dispositivo con una cuenta autorizada de la misma empresa para abrir el producto o registrar su ingreso. Revisa los datos antes de guardar.</p>
+      <p className="qr-guidance">{draft ? 'Este QR contiene todos los datos del formulario y todavía no registra el producto en el inventario. Escanéalo desde una cuenta autorizada de la empresa, revisa los datos y guarda cuando quieras registrarlo.' : 'Escanea este QR en otro dispositivo con una cuenta autorizada de la misma empresa para abrir el producto o registrar su ingreso. Revisa los datos antes de guardar.'}</p>
       {(payloadError || error) && <p className="qr-error" role="alert">{payloadError || error}</p>}
       {current?.compact && <p className="qr-guidance">Este QR usa el identificador del producto porque sus datos completos son extensos. Al escanearlo con una cuenta autorizada de la misma empresa se consultarán los datos actuales en la nube.</p>}
       {image && !error && !payloadError && <img className="qr-image" src={image} alt={`Código QR del producto ${product.name}`} width="360" height="360" />}

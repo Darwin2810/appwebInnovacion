@@ -1004,3 +1004,5 @@
   .heading-actions > button { flex: 1; }
   .header-account .secondary-button { min-height: 36px; padding: 7px 11px; font-size: 11px; }
 }
+.erp-navigation { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0 1.5rem; }
+.erp-navigation button { min-height: 44px; }

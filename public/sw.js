@@ -1,7 +1,7 @@
 // Store only the public interface. Firebase, authentication and inventory
 // traffic are deliberately left to the network and Firebase SDK.
 const CACHE_PREFIX = 'exlaider-shell-'
-const CACHE_NAME = `${CACHE_PREFIX}v1`
+const CACHE_NAME = `${CACHE_PREFIX}v2`
 const SHELL_URL = '/index.html'
 const STATIC_URLS = [
   '/manifest.webmanifest',

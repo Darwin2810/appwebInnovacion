@@ -93,3 +93,15 @@ test('rechaza imágenes con protocolos ejecutables o sin HTTPS', () => {
   }
   assert.equal(normalizeProduct(valid({ imageUrl: '' })).imageUrl, '')
 })
+
+test('conserva unidades de materiales y mantiene compatibles los productos anteriores', () => {
+  const previous = normalizeProduct(valid())
+  assert.equal(previous.kind, 'finished')
+  assert.equal(previous.unit, 'unidad')
+  const material = normalizeProduct(valid({ kind: 'material', unit: 'cm', stock: 2500, unitCostCents: 99 }))
+  assert.equal(material.kind, 'material')
+  assert.equal(material.unit, 'cm')
+  assert.equal(material.stock, 2500)
+  assert.equal(Object.hasOwn(material, 'unitCostCents'), false)
+  for (const fields of [{ kind: 'finished', unit: 'cm' }, { kind: 'material', unit: 'litro' }, { kind: 'otro' }]) assert.throws(() => normalizeProduct(valid(fields)), Error)
+})

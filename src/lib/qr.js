@@ -2,7 +2,8 @@ const SKU = /^[A-Za-z0-9._-]{1,40}$/
 const ID = /^[A-Za-z0-9_-]{1,128}$/
 const TEXT = { name: 100, description: 2000, category: 60, reference: 60, size: 20, color: 40, lot: 60, imageUrl: 500 }
 const NUMBERS = { price: 1e12, stock: 1e9, minStock: 1e9 }
-const ALLOWED = new Set(['v', 'type', 'id', 'sku', 'currency', ...Object.keys(TEXT), ...Object.keys(NUMBERS)])
+const ENUMS = { kind: ['finished', 'material'], unit: ['unidad', 'cm', 'g'] }
+const ALLOWED = new Set(['v', 'type', 'id', 'sku', 'currency', ...Object.keys(TEXT), ...Object.keys(NUMBERS), ...Object.keys(ENUMS)])
 const fail = (message) => { throw new Error(message) }
 const unsafeControl = (text) => Array.from(text).some((character) => character.charCodeAt(0) < 32 && ![9, 10, 13].includes(character.charCodeAt(0)))
 
@@ -47,6 +48,12 @@ export function parseProductQr(text) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limit || (field !== 'price' && !Number.isSafeInteger(value))) fail(`El campo ${field} debe ser un número válido entre 0 y ${limit}.`)
     result.fields[field] = value
   }
+  for (const [field, values] of Object.entries(ENUMS)) {
+    if (!Object.hasOwn(data, field)) continue
+    if (!values.includes(data[field])) fail(`El campo ${field} no es válido.`)
+    result.fields[field] = data[field]
+  }
+  if (data.unit && data.unit !== 'unidad' && data.kind !== 'material') fail('Los centímetros y gramos solo se admiten para materias primas.')
   if (Object.hasOwn(data, 'currency')) {
     if (data.currency !== 'COP') fail('La moneda del QR debe ser COP.')
     result.fields.currency = 'COP'
@@ -59,7 +66,7 @@ export function makeProductQr(product) {
   const data = { v: 1, type: 'inventory-product' }
   if (product.id) data.id = product.id
   if (product.sku) data.sku = product.sku
-  for (const field of [...Object.keys(TEXT), ...Object.keys(NUMBERS)]) {
+  for (const field of [...Object.keys(TEXT), ...Object.keys(NUMBERS), ...Object.keys(ENUMS)]) {
     if (product[field] !== undefined && product[field] !== null) data[field] = product[field]
   }
   data.currency = 'COP'

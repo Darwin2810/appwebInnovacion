@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, test } from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
 import {
   assertFails,
   assertSucceeds,
@@ -9,103 +8,34 @@ import {
 } from '@firebase/rules-unit-testing'
 import {
   collection,
+  collectionGroup,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
   onSnapshot,
-  serverTimestamp,
+  query,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore'
-import { createProductRepository } from '../src/lib/products.js'
-import { normalizeProduct, skuDocumentKey } from '../src/lib/productModel.js'
 
-const company = 'exlaider-jeans'
-const productPath = `organizations/${company}/products`
-const indexPath = `organizations/${company}/skuIndex`
-const valid = (overrides = {}) => ({
-  name: 'Jeans Slim Azul',
-  sku: 'EX-SLIM-AZ-M',
-  reference: 'EX-SLIM',
-  size: 'M',
-  color: 'Azul',
-  lot: 'LOTE-01',
-  description: 'Denim elástico',
-  category: 'Jeans',
-  price: 129900,
-  stock: 8,
-  minStock: 3,
-  imageUrl: 'https://example.com/jeans.jpg',
-  ...overrides,
-})
+const privateCollections = [
+  'costs', 'journals', 'commands', 'audit', 'sales', 'purchases',
+  'payments', 'productionBoms', 'productionOrders', 'employees',
+  'attendance', 'payroll', 'financeEntries', 'contacts', 'migrations',
+]
 
-function productData(uid, overrides = {}) {
-  return {
-    ...normalizeProduct(valid()),
-    createdBy: uid,
-    updatedBy: uid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    ...overrides,
-  }
-}
-
-function writeProduct(db, uid, id, overrides = {}) {
-  const data = productData(uid, overrides)
-  const batch = writeBatch(db)
-  batch.set(doc(db, productPath, id), data)
-  if (data.skuKey) {
-    batch.set(doc(db, indexPath, skuDocumentKey(data.skuKey)), {
-      productId: id,
-      skuKey: data.skuKey,
-      createdAt: serverTimestamp(),
-    })
-  }
-  return batch.commit()
-}
-
-function waitForProducts(db, predicate) {
-  return new Promise((resolve, reject) => {
-    let unsubscribe = () => {}
-    const timeout = setTimeout(() => {
-      unsubscribe()
-      reject(new Error('No se recibió la actualización en tiempo real en 10 segundos.'))
-    }, 10000)
-
-    unsubscribe = onSnapshot(
-      collection(db, productPath),
-      { includeMetadataChanges: true },
-      (snapshot) => {
-        if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return
-        const rows = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
-        if (!predicate(rows)) return
-        clearTimeout(timeout)
-        unsubscribe()
-        resolve(rows)
-      },
-      (error) => {
-        clearTimeout(timeout)
-        unsubscribe()
-        reject(error)
-      },
-    )
-  })
-}
-
-describe('Firestore: permisos, SKU únicos y sincronización entre dispositivos', {
+describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de escritura', {
   skip: !process.env.FIRESTORE_EMULATOR_HOST,
 }, () => {
   let environment
-  let desktopDb
-  let mobileDb
-  let desktop
-  let mobile
-  let adminDb
-  let admin
-  let viewerDb
-  let outsiderDb
-  let inactiveDb
+  let company
+  let sequence = 0
+  const clients = {}
+  const path = (collectionName, id = 'fixture') => `organizations/${company}/${collectionName}/${id}`
+  const dbFor = (role) => clients[role]
 
   before(async () => {
     const address = new URL(`http://${process.env.FIRESTORE_EMULATOR_HOST}`)
@@ -114,194 +44,120 @@ describe('Firestore: permisos, SKU únicos y sincronización entre dispositivos'
       firestore: {
         host: address.hostname,
         port: Number(address.port),
-        rules: await readFile(fileURLToPath(new URL('../firestore.rules', import.meta.url)), 'utf8'),
+        rules: await readFile(new URL('../firestore.rules', import.meta.url), 'utf8'),
       },
     })
-    desktopDb = environment.authenticatedContext('desktop').firestore()
-    mobileDb = environment.authenticatedContext('mobile').firestore()
-    adminDb = environment.authenticatedContext('admin').firestore()
-    viewerDb = environment.authenticatedContext('viewer').firestore()
-    outsiderDb = environment.authenticatedContext('outsider').firestore()
-    inactiveDb = environment.authenticatedContext('inactive').firestore()
-    desktop = createProductRepository(desktopDb, company)
-    mobile = createProductRepository(mobileDb, company)
-    admin = createProductRepository(adminDb, company)
+    for (const uid of ['admin', 'operator', 'viewer', 'inactive', 'outsider', 'pending', 'invalid-role']) {
+      clients[uid] = environment.authenticatedContext(uid).firestore()
+    }
+    clients.anonymous = environment.unauthenticatedContext().firestore()
   })
 
   beforeEach(async () => {
-    await environment.clearFirestore()
+    company = `rules-${process.pid}-${Date.now()}-${++sequence}`
     await environment.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore()
-      await Promise.all([
-        ...[
-          ['desktop', 'operator'],
-          ['mobile', 'operator'],
-          ['admin', 'admin'],
-          ['viewer', 'viewer'],
-        ].map(([uid, role]) => setDoc(doc(db, `organizations/${company}/members/${uid}`), {
-          role,
-          active: true,
-        })),
-        setDoc(doc(db, `organizations/${company}/members/inactive`), {
-          role: 'operator',
-          active: false,
-        }),
-        setDoc(doc(db, 'organizations/otra-empresa/members/outsider'), {
-          role: 'operator',
-          active: true,
-        }),
-      ])
+      const batch = writeBatch(db)
+      batch.set(doc(db, `organizations/${company}`), { name: 'EXLAIDER JEANS SAS' })
+      for (const role of ['admin', 'operator', 'viewer']) {
+        batch.set(doc(db, path('members', role)), { role, active: true })
+      }
+      batch.set(doc(db, path('members', 'inactive')), { role: 'operator', active: false })
+      batch.set(doc(db, path('members', 'invalid-role')), { role: 'employee', active: true })
+      batch.set(doc(db, `organizations/another-${company}/members/outsider`), { role: 'admin', active: true })
+      for (const name of ['references', 'variants']) {
+        batch.set(doc(db, path(name, 'finished')), { kind: 'finished', name: 'Jeans', stock: 5 })
+        batch.set(doc(db, path(name, 'material')), { kind: 'material', name: 'Tela', stock: 100 })
+      }
+      for (const name of [...privateCollections, 'movements', 'products', 'variantSkuIndex', 'skuIndex']) {
+        batch.set(doc(db, path(name)), { fixture: true, ...(name === 'costs' ? { stockValueCents: 100000 } : {}) })
+      }
+      await batch.commit()
     })
   })
 
   after(async () => { await environment?.cleanup() })
 
-  test('operadores comparten productos, sólo el administrador elimina y lectores sólo consultan', async () => {
-    const id = await desktop.createProduct('desktop', valid())
-    await assertSucceeds(getDoc(doc(mobileDb, productPath, id)))
-    await assertSucceeds(getDocs(collection(viewerDb, productPath)))
-    await assertSucceeds(getDoc(doc(adminDb, productPath, id)))
-    await assertFails(updateDoc(doc(viewerDb, productPath, id), {
-      name: 'Cambio no autorizado',
-      updatedBy: 'viewer',
-      updatedAt: serverTimestamp(),
-    }))
-    await assert.rejects(createProductRepository(viewerDb, company).createProduct('viewer', valid({ sku: 'VIEWER-01' })))
-    await assert.rejects(desktop.deleteProduct('desktop', id))
-  })
-
-  test('deniega usuarios sin sesión, sin membresía, inactivos y de otra empresa', async () => {
-    const id = await desktop.createProduct('desktop', valid())
-    for (const db of [environment.unauthenticatedContext().firestore(), outsiderDb, inactiveDb]) {
-      await assertFails(getDoc(doc(db, productPath, id)))
-      await assertFails(getDocs(collection(db, productPath)))
+  test('admin y operador leen catálogo; viewer sólo productos terminados y consultas filtradas', async () => {
+    for (const name of ['references', 'variants']) {
+      const collectionPath = `organizations/${company}/${name}`
+      for (const role of ['admin', 'operator']) {
+        assert.equal((await assertSucceeds(getDocs(collection(dbFor(role), collectionPath)))).size, 2)
+        await assertSucceeds(getDoc(doc(dbFor(role), path(name, 'material'))))
+      }
+      await assertSucceeds(getDoc(doc(dbFor('viewer'), path(name, 'finished'))))
+      await assertFails(getDoc(doc(dbFor('viewer'), path(name, 'material'))))
+      await assertFails(getDocs(collection(dbFor('viewer'), collectionPath)))
+      const finished = query(collection(dbFor('viewer'), collectionPath), where('kind', '==', 'finished'))
+      assert.equal((await assertSucceeds(getDocs(finished))).size, 1)
     }
-    await assert.rejects(createProductRepository(outsiderDb, company).createProduct('outsider', valid({ sku: 'OUTSIDER-01' })))
-    await assertFails(getDocs(collection(desktopDb, 'organizations/otra-empresa/products')))
+    await assertSucceeds(getDocs(collection(dbFor('viewer'), `organizations/${company}/products`)))
+    await assertSucceeds(getDocs(collection(dbFor('operator'), `organizations/${company}/movements`)))
+    await assertFails(getDocs(collection(dbFor('viewer'), `organizations/${company}/movements`)))
   })
 
-  test('el cliente no puede darse membresía ni elevar su rol', async () => {
-    await assertFails(setDoc(doc(outsiderDb, `organizations/${company}/members/outsider`), {
-      role: 'admin',
-      active: true,
-    }))
-    await assertFails(updateDoc(doc(desktopDb, `organizations/${company}/members/desktop`), {
-      role: 'admin',
-    }))
-  })
-
-  test('requiere un esquema válido, autor auténtico y timestamps de servidor', async () => {
-    for (const [position, overrides] of [
-      { stock: -1 },
-      { stock: 1.5 },
-      { minStock: -1 },
-      { price: -1 },
-      { currency: 'USD' },
-      { createdBy: 'outsider' },
-      { updatedBy: 'outsider' },
-      { extra: true },
-      { imageUrl: 'javascript:alert(1)' },
-      { imageUrl: 'http://example.com/a.jpg' },
-    ].entries()) {
-      await assertFails(writeProduct(desktopDb, 'desktop', `invalid-${position}`, overrides))
+  test('costos, finanzas, ventas, producción y personal sólo los puede consultar el administrador', async () => {
+    for (const name of privateCollections) {
+      await assertSucceeds(getDoc(doc(dbFor('admin'), path(name))))
+      await assertSucceeds(getDocs(collection(dbFor('admin'), `organizations/${company}/${name}`)))
+      for (const role of ['operator', 'viewer']) {
+        await assertFails(getDoc(doc(dbFor(role), path(name))))
+        await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/${name}`)))
+      }
     }
-    const noTimestamps = productData('desktop', { sku: '', skuKey: '' })
-    delete noTimestamps.createdAt
-    delete noTimestamps.updatedAt
-    await assertFails(setDoc(doc(desktopDb, productPath, 'missing-timestamps'), noTimestamps))
-    await assert.rejects(desktop.createProduct('mobile', valid({ sku: 'FORGED-ACTOR' })))
-    const id = await desktop.createProduct('desktop', valid())
-    await assertFails(updateDoc(doc(desktopDb, productPath, id), {
-      createdBy: 'mobile',
-      updatedBy: 'desktop',
-      updatedAt: serverTimestamp(),
-    }))
-  })
-
-  test('un SKU sólo puede apuntar a un producto y el índice es obligatorio', async () => {
-    const id = await desktop.createProduct('desktop', valid())
-    const key = skuDocumentKey(valid().sku)
-    const index = await getDoc(doc(desktopDb, indexPath, key))
-    assert.equal(index.data().productId, id)
-    await assert.rejects(mobile.createProduct('mobile', valid({ sku: 'ex-slim-az-m' })))
-    await assertFails(setDoc(doc(desktopDb, productPath, 'without-index'), productData('desktop', {
-      sku: 'NO-INDEX',
-      skuKey: 'no-index',
-    })))
-    await assertFails(setDoc(doc(desktopDb, indexPath, 's_orphan'), {
-      productId: 'absent',
-      skuKey: 'orphan',
-      createdAt: serverTimestamp(),
-    }))
-    await assertFails(setDoc(doc(desktopDb, productPath, 'bypass-key'), productData('desktop', {
-      sku: 'UNIQUE-SKU',
-      skuKey: '',
-    })))
-    assert.equal((await desktop.getProductBySku('desktop', '  EX-SLIM-AZ-M  ')).id, id)
-  })
-
-  test('editar conserva existencias y cambia el índice SKU de forma atómica', async () => {
-    const id = await desktop.createProduct('desktop', valid())
-    await mobile.updateProduct('mobile', id, valid({
-      name: 'Jeans Slim actualizado',
-      sku: 'EX-NUEVO-M',
-      stock: 999,
-    }))
-    const product = (await getDoc(doc(desktopDb, productPath, id))).data()
-    assert.equal(product.name, 'Jeans Slim actualizado')
-    assert.equal(product.stock, 8)
-    assert.equal(product.createdBy, 'desktop')
-    assert.equal(product.updatedBy, 'mobile')
-    assert.equal((await getDoc(doc(desktopDb, indexPath, skuDocumentKey(valid().sku)))).exists(), false)
-    assert.equal((await getDoc(doc(desktopDb, indexPath, skuDocumentKey('EX-NUEVO-M')))).data().productId, id)
-    await assertFails(updateDoc(doc(desktopDb, productPath, id), {
-      sku: 'EX-ORPHAN',
-      skuKey: 'ex-orphan',
-      updatedBy: 'desktop',
-      updatedAt: serverTimestamp(),
-    }))
-    const second = await desktop.createProduct('desktop', valid({ sku: 'OTHER-SKU' }))
-    await assert.rejects(desktop.updateProduct('desktop', second, valid({ sku: 'EX-NUEVO-M' })))
-  })
-
-  test('el administrador elimina y libera el SKU para un nuevo producto', async () => {
-    const id = await desktop.createProduct('desktop', valid())
-    await admin.deleteProduct('admin', id)
-    assert.equal((await getDoc(doc(desktopDb, productPath, id))).exists(), false)
-    assert.equal((await getDoc(doc(desktopDb, indexPath, skuDocumentKey(valid().sku)))).exists(), false)
-    const replacement = await mobile.createProduct('mobile', valid())
-    assert.notEqual(replacement, id)
-  })
-
-  test('onSnapshot refleja crear, editar e ingresar desde celular en computador y eliminar por administrador', async () => {
-    const created = waitForProducts(desktopDb, (rows) => rows.some((row) => row.skuKey === 'ex-slim-az-m'))
-    const id = await mobile.createProduct('mobile', valid())
-    assert.equal((await created).find((row) => row.id === id).stock, 8)
-    const edited = waitForProducts(desktopDb, (rows) => rows.some((row) => row.id === id && row.name === 'Jeans cambiado'))
-    await mobile.updateProduct('mobile', id, valid({ name: 'Jeans cambiado' }))
-    await edited
-    const received = waitForProducts(desktopDb, (rows) => rows.some((row) => row.id === id && row.stock === 10))
-    assert.equal(await mobile.receiveProduct('mobile', id, 2), 10)
-    await received
-    const deleted = waitForProducts(mobileDb, (rows) => !rows.some((row) => row.id === id))
-    await admin.deleteProduct('admin', id)
-    await deleted
-  })
-
-  test('ingresos simultáneos y una edición no pierden unidades', async () => {
-    const id = await desktop.createProduct('desktop', valid({ stock: 0 }))
-    await Promise.all([
-      desktop.receiveProduct('desktop', id, 2),
-      mobile.receiveProduct('mobile', id, 3),
-      desktop.receiveProduct('desktop', id, 4),
-      mobile.receiveProduct('mobile', id, 5),
-      desktop.updateProduct('desktop', id, valid({ name: 'Edición simultánea', stock: 999 })),
-    ])
-    const result = (await getDoc(doc(desktopDb, productPath, id))).data()
-    assert.equal(result.stock, 14)
-    assert.equal(result.name, 'Edición simultánea')
-    for (const quantity of [0, -1, 1.5]) {
-      await assert.rejects(mobile.receiveProduct('mobile', id, quantity))
+    for (const name of ['skuIndex', 'variantSkuIndex', 'variantCombinationIndex', 'employeeDocumentIndex', 'payrollPeriodIndex']) {
+      await assertFails(getDoc(doc(dbFor('admin'), path(name))))
     }
+    for (const role of ['operator', 'viewer']) await assertFails(getDocs(collectionGroup(dbFor(role), 'costs')))
+  })
+
+  test('nadie escribe directamente, ni siquiera admin: conserva trazabilidad y operaciones atómicas', async () => {
+    for (const role of ['admin', 'operator', 'viewer']) {
+      for (const name of ['members', 'references', 'variants', 'products', 'costs', 'movements', 'journals', 'audit', 'sales', 'variantSkuIndex']) {
+        const existing = name === 'members' ? role : name === 'variants' || name === 'references' ? 'finished' : 'fixture'
+        await assertFails(setDoc(doc(dbFor(role), path(name, 'injected')), { role: 'admin', active: true }))
+        await assertFails(updateDoc(doc(dbFor(role), path(name, existing)), { injected: true }))
+        await assertFails(deleteDoc(doc(dbFor(role), path(name, existing))))
+      }
+    }
+  })
+
+  test('sesión, membresía activa y empresa coincidente son obligatorias', async () => {
+    for (const role of ['anonymous', 'outsider', 'inactive', 'pending', 'invalid-role']) {
+      for (const name of ['variants', 'references', 'products', 'costs', 'movements']) {
+        await assertFails(getDoc(doc(dbFor(role), path(name, name === 'variants' || name === 'references' ? 'finished' : 'fixture'))))
+        await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/${name}`)))
+      }
+    }
+    await assertFails(getDocs(collection(dbFor('admin'), `organizations/another-${company}/variants`)))
+  })
+
+  test('usuario pendiente lee su estado; sólo admin lista miembros y ve otros usuarios', async () => {
+    await assertSucceeds(getDoc(doc(dbFor('pending'), path('members', 'pending'))))
+    await assertSucceeds(getDoc(doc(dbFor('inactive'), path('members', 'inactive'))))
+    await assertSucceeds(getDoc(doc(dbFor('operator'), path('members', 'operator'))))
+    await assertSucceeds(getDoc(doc(dbFor('admin'), path('members', 'operator'))))
+    await assertSucceeds(getDocs(collection(dbFor('admin'), `organizations/${company}/members`)))
+    for (const role of ['operator', 'viewer', 'pending']) {
+      await assertFails(getDoc(doc(dbFor(role), path('members', 'admin'))))
+      await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/members`)))
+    }
+  })
+
+  test('onSnapshot transmite a ambos dispositivos cambios autorizados realizados por el backend', async () => {
+    const waitForStock = (db, expected) => new Promise((resolve, reject) => {
+      let unsubscribe = () => {}
+      const timer = setTimeout(() => { unsubscribe(); reject(new Error('Actualización en tiempo real no recibida')) }, 10000)
+      unsubscribe = onSnapshot(doc(db, path('variants', 'finished')), (snapshot) => {
+        if (snapshot.metadata.fromCache || snapshot.data()?.stock !== expected) return
+        clearTimeout(timer)
+        unsubscribe()
+        resolve(snapshot.data().stock)
+      }, (error) => { clearTimeout(timer); unsubscribe(); reject(error) })
+    })
+    const desktop = waitForStock(dbFor('admin'), 9)
+    const mobile = waitForStock(dbFor('operator'), 9)
+    await environment.withSecurityRulesDisabled((context) => updateDoc(doc(context.firestore(), path('variants', 'finished')), { stock: 9 }))
+    assert.deepEqual(await Promise.all([desktop, mobile]), [9, 9])
   })
 })

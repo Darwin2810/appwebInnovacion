@@ -2,68 +2,62 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function memberPath(companyId) { return /databases/$(database)/documents/organizations/$(companyId)/members/$(request.auth.uid); }
+    function memberPath(companyId) {
+      return /databases/$(database)/documents/organizations/$(companyId)/members/$(request.auth.uid);
+    }
     function isMember(companyId) {
-      return signedIn() && exists(memberPath(companyId)) && get(memberPath(companyId)).data.active == true
+      return signedIn() && exists(memberPath(companyId))
+        && get(memberPath(companyId)).data.active == true
         && get(memberPath(companyId)).data.role in ['admin', 'operator', 'viewer'];
     }
-    function canWrite(companyId) { return isMember(companyId) && get(memberPath(companyId)).data.role in ['admin', 'operator']; }
-    function isAdmin(companyId) { return isMember(companyId) && get(memberPath(companyId)).data.role == 'admin'; }
-    function productPath(companyId, productId) { return /databases/$(database)/documents/organizations/$(companyId)/products/$(productId); }
-    function indexPath(companyId, skuKey) { return /databases/$(database)/documents/organizations/$(companyId)/skuIndex/$('s_' + skuKey); }
-    function text(value, max) { return value is string && value.size() <= max; }
-    function productSchema(data) {
-      return data.keys().hasAll(['name', 'sku', 'skuKey', 'description', 'category', 'reference', 'size', 'color', 'lot', 'imageUrl', 'price', 'stock', 'minStock', 'currency', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'])
-        && data.keys().hasOnly(['name', 'sku', 'skuKey', 'description', 'category', 'reference', 'size', 'color', 'lot', 'imageUrl', 'price', 'stock', 'minStock', 'currency', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'])
-        && text(data.name, 100) && data.name.matches('.*[^ ].*')
-        && text(data.sku, 40) && (data.sku == '' || data.sku.matches('^[a-zA-Z0-9._-]{1,40}$'))
-        && data.skuKey == data.sku.lower()
-        && text(data.description, 2000) && text(data.category, 60) && data.category.matches('.*[^ ].*')
-        && text(data.reference, 60) && text(data.size, 20) && text(data.color, 40) && text(data.lot, 60)
-        && text(data.imageUrl, 500) && (data.imageUrl == '' || data.imageUrl.matches('^https://[^ ]+$'))
-        && data.price is number && data.price >= 0 && data.price <= 1000000000000
-        && data.stock is int && data.stock >= 0 && data.stock <= 1000000000
-        && data.minStock is int && data.minStock >= 0 && data.minStock <= 1000000000
-        && data.currency == 'COP' && data.createdAt is timestamp && data.updatedAt is timestamp
-        && data.createdBy is string && data.updatedBy == request.auth.uid;
+    function isAdmin(companyId) {
+      return isMember(companyId) && get(memberPath(companyId)).data.role == 'admin';
     }
-    function hasIndex(companyId, productId, data) {
-      return data.skuKey == '' || (existsAfter(indexPath(companyId, data.skuKey))
-        && getAfter(indexPath(companyId, data.skuKey)).data.productId == productId
-        && getAfter(indexPath(companyId, data.skuKey)).data.skuKey == data.skuKey);
+    function isStaff(companyId) {
+      return isMember(companyId) && get(memberPath(companyId)).data.role in ['admin', 'operator'];
     }
-    function releasesOldIndex(companyId) {
-      return resource.data.skuKey == '' || resource.data.skuKey == request.resource.data.skuKey || !existsAfter(indexPath(companyId, resource.data.skuKey));
+    function canReadCatalog(companyId) {
+      return isStaff(companyId)
+        || (isMember(companyId) && resource.data.kind == 'finished');
     }
-    match /organizations/{companyId}/members/{uid} {
-      // Membership is provisioned using Firebase Console/Admin SDK only.
-      allow get: if signedIn() && request.auth.uid == uid;
-      allow list, create, update, delete: if false;
-    }
-    match /organizations/{companyId}/products/{productId} {
-      allow read: if isMember(companyId);
-      allow create: if canWrite(companyId) && productSchema(request.resource.data)
-        && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time && hasIndex(companyId, productId, request.resource.data);
-      allow update: if canWrite(companyId) && productSchema(request.resource.data)
-        && request.resource.data.createdAt == resource.data.createdAt && request.resource.data.createdBy == resource.data.createdBy
-        && request.resource.data.updatedAt == request.time && request.resource.data.stock >= resource.data.stock
-        && hasIndex(companyId, productId, request.resource.data) && releasesOldIndex(companyId);
-      allow delete: if isAdmin(companyId) && (resource.data.skuKey == '' || !existsAfter(indexPath(companyId, resource.data.skuKey)));
-    }
-    match /organizations/{companyId}/skuIndex/{key} {
-      allow read: if isMember(companyId);
-      allow create: if canWrite(companyId)
-        && request.resource.data.keys().hasAll(['productId', 'skuKey', 'createdAt'])
-        && request.resource.data.keys().hasOnly(['productId', 'skuKey', 'createdAt'])
-        && request.resource.data.productId is string && request.resource.data.productId.matches('^[a-zA-Z0-9_-]{1,128}$')
-        && request.resource.data.skuKey is string && request.resource.data.skuKey.matches('^[a-z0-9._-]{1,40}$')
-        && key == 's_' + request.resource.data.skuKey && request.resource.data.createdAt == request.time
-        && existsAfter(productPath(companyId, request.resource.data.productId))
-        && getAfter(productPath(companyId, request.resource.data.productId)).data.skuKey == request.resource.data.skuKey;
-      allow update: if false;
-      allow delete: if canWrite(companyId) && (!existsAfter(productPath(companyId, resource.data.productId))
-        || getAfter(productPath(companyId, resource.data.productId)).data.skuKey != resource.data.skuKey);
+
+    match /organizations/{companyId} {
+      allow get: if isMember(companyId);
+      allow list, write: if false;
+
+      match /members/{uid} {
+        // Pending users may read their own approval status; only an admin sees the team.
+        allow get: if signedIn() && (request.auth.uid == uid || isAdmin(companyId));
+        allow list: if isAdmin(companyId);
+        allow write: if false;
+      }
+      match /references/{referenceId} {
+        // Viewer collection queries must contain where('kind', '==', 'finished').
+        allow read: if canReadCatalog(companyId);
+        allow write: if false;
+      }
+      match /variants/{variantId} {
+        allow read: if canReadCatalog(companyId);
+        allow write: if false;
+      }
+      match /products/{legacyId} {
+        // The previous catalogue remains visible until an admin migrates it.
+        allow read: if isMember(companyId);
+        allow write: if false;
+      }
+      match /movements/{movementId} {
+        allow read: if isStaff(companyId);
+        allow write: if false;
+      }
+      match /{privateCollection}/{documentId} {
+        allow read: if privateCollection in [
+          'costs', 'journals', 'commands', 'audit', 'sales', 'purchases',
+          'payments', 'productionBoms', 'productionOrders', 'employees',
+          'attendance', 'payroll', 'financeEntries', 'contacts', 'migrations'
+        ] && isAdmin(companyId);
+        // All business mutations go through the authenticated ERP callable.
+        allow write: if false;
+      }
     }
     match /{document=**} { allow read, write: if false; }
   }

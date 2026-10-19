@@ -1,67 +1,74 @@
-# EXLAIDER JEANS S.A.S. · Inventario conectado
+# EXLAIDER JEANS SAS · Gestión conectada
 
-Aplicación de inventario para computador, iPhone y Android con una misma interfaz React adaptable. El registro manual, la lectura de QR y las existencias comparten Cloud Firestore; las pantallas autorizadas reciben cambios sin recargar.
-
-## Stack recomendado
-
-| Capa | Tecnología | Por qué |
-| --- | --- | --- |
-| Frontend compartido | React + Vite + JavaScript | Aprovecha el proyecto existente y comparte componentes, formularios y lógica entre dispositivos. |
-| Instalación | PWA | Se añade a la pantalla de inicio sin mantener dos aplicaciones nativas. |
-| Identidad | Firebase Authentication, correo/contraseña | Identifica a cada persona antes de consultar el inventario. |
-| Backend y base de datos | Firestore + reglas de seguridad | Suscripciones en tiempo real, transacciones y permisos por empresa sin administrar un servidor propio. |
-| QR | html5-qrcode + qrcode | Cámara o imagen para leer; generación de etiquetas para identificar prendas. |
-| Publicación | Firebase Hosting | HTTPS para usar la cámara desde el celular. |
-
-La PWA funciona en navegadores compatibles de escritorio, iOS y Android. No incluye binarios nativos ni publicación en App Store o Play Store. Si se requiere distribución en tiendas, se puede evaluar Capacitor en una fase posterior.
+Aplicación React instalable como PWA en computador, iPhone y Android. Firebase Authentication identifica al usuario; Firestore sincroniza lecturas; Firebase Functions valida cada operación y registra stock, costos, asientos y auditoría en una transacción.
 
 ## Funciones
 
-- Registro y edición de nombre, SKU, descripción, categoría, referencia, talla, color, lote, foto por URL HTTPS, precio COP, stock y mínimo.
-- Búsqueda, filtro, resumen del inventario y señalización de existencias bajas.
-- Lectura de QR con cámara, archivo de imagen o contenido escrito. Un producto existente se consulta en la empresa actual; los datos de uno nuevo prellenan el formulario para revisión.
-- Entrada de unidades con confirmación y transacción para evitar perder incrementos simultáneos. Opcionalmente, el operador puede activar «Ingreso directo» para sumar una unidad al leer un producto existente.
-- Generación de etiquetas QR y sincronización mediante `onSnapshot`.
-- Miembros activos con roles `admin`, `operator` y `viewer`. Los clientes previamente aprobados consultan sin modificar.
+- Catálogo por referencia con un solo nombre común y variantes de talla, color y lote; SKU y combinación únicos.
+- Ingreso manual o por QR; preparar y descargar un QR completo **antes de guardar** el producto no crea inventario.
+- Materias primas en unidades, centímetros o gramos; stock entero y costos de adquisición separados del precio de venta.
+- Ventas, compras, cuentas pendientes, pagos parciales y anulaciones con contrapartidas.
+- Recetas y órdenes de producción: materiales → producción en proceso → producto terminado.
+- Empleados, asistencia, nómina interna con ajustes explícitos y pagos.
+- Directorio de clientes/proveedores, caja, diario contable, panel de dirección, autorización de usuarios y auditoría.
+- Migración explícita del inventario anterior: conserva documentos e identificadores, señala referencias conflictivas y no inventa costos.
 
-El documento aportado de EXLAIDER orientó los campos referencia/talla/lote, las prendas y la separación entre administración y consulta. Esta entrega cubre el inventario y el ingreso de productos; CRM, ventas y reportes de rotación son fases posteriores. Consulta [el alcance](docs/EXLAIDER_ALCANCE.md).
+## Permisos
 
-## Ejecutar en VS Code
+| Función | Administrador | Operador | Viewer |
+|---|---|---|---|
+| Consultar prendas, stock y precio unitario; ver QR | Sí | Sí | Sí |
+| Registrar variantes y entradas; editar datos de variante y nombre común | Sí | Sí | No |
+| Consultar materiales y movimientos | Sí | Sí | No |
+| Resumen del valor a precio de venta | Sí | No | Sí, como antes |
+| Costos privados, ventas, compras, producción, finanzas, personal, usuarios y auditoría | Sí | No | No |
+| Ajustar, valorar, archivar/reactivar y migrar | Sí | No | No |
 
-Instala Node.js 24 LTS y abre la carpeta que contiene `package.json`. En PowerShell usa `npm.cmd` para evitar el bloqueo de `npm.ps1` sin cambiar la política de Windows.
+Los costos y documentos privados se protegen con reglas y comprobación de rol en el servidor. El operador conserva precio unitario y stock: podría calcular por su cuenta su valor a precio de venta. Ocultar el resumen no hace secreta esa información derivada. Los costos de adquisición sí se almacenan aparte y se deniegan al operador/viewer.
+
+## Instalar en VS Code
+
+Lee [LEEME_VSCODE.md](LEEME_VSCODE.md). Instala Node.js 22 LTS (24 también sirve para desarrollar; Functions se publica con Node22). En PowerShell, desde la carpeta que contiene este `package.json`:
 
 ```powershell
 npm.cmd ci
+npm.cmd ci --prefix functions
 Copy-Item .env.example .env.local
 npm.cmd run dev
 ```
 
-Antes de usar la nube, completa `.env.local`, habilita Authentication y Firestore, autoriza las cuentas y publica las reglas. Sigue [la configuración paso a paso](docs/FIREBASE_Y_QR.md). La configuración web Firebase es pública; nunca coloques una clave privada de cuenta de servicio en el frontend.
+Completa `.env.local` con la configuración pública de **tu** proyecto antes de usar la nube. No reemplaces tu archivo existente si estás actualizando. El backend Functions necesita plan **Blaze**; este código no activa facturación ni publica cambios automáticamente. El desarrollo con emuladores no requiere Blaze ni datos de producción.
 
-Para trabajar sin un proyecto de producción se incluyen emuladores de Auth y Firestore. Requieren Java 21 y dos terminales: `npm.cmd run emulators` y `npm.cmd run dev:emulator`. Los datos de los emuladores no se envían a producción.
+## Pruebas y emuladores
 
-## Validar
+Requieren Java 21 para Firestore. Usa dos terminales:
+
+```powershell
+npm.cmd run emulators
+```
+
+```powershell
+npm.cmd run dev:emulator
+```
+
+El modo emulador fija el proyecto `demo-inventario` aunque exista `.env.local` de producción. Crea una cuenta en la interfaz y autorízala con `node scripts/approve-emulator.mjs UID admin` (sólo demo local).
 
 ```powershell
 npm.cmd run lint -- --max-warnings=0
 npm.cmd test
 npm.cmd run test:cloud
 npm.cmd run build
+npm.cmd run build -- --mode emulator
+npm.cmd run test:browser
 ```
 
-`test:cloud` utiliza Firebase Emulator Suite y requiere Java 21. No verifica un despliegue real. `npm.cmd run preview` permite revisar la compilación localmente; no publica el sitio.
+`test:cloud` comprueba reglas y servicios reales contra Firestore emulado. `test:browser` inicia Auth, Firestore y Functions y usa Chrome/Chromium con tres sesiones aisladas. Las pruebas usan datos sintéticos; no certifican cámaras físicas ni un despliegue de producción. El flujo de CI está en `.github/workflows/ci.yml`.
 
-## Cámara y uso en dos dispositivos
+## Documentación
 
-La cámara necesita permiso y un contexto seguro: HTTPS o `localhost` en el propio dispositivo. Una URL como `http://192.168.1.10:5173` sirve para visualizar la web en la red local, pero normalmente no permite usar la cámara del celular. Publica en Firebase Hosting y abre la misma URL HTTPS en ambos equipos.
+- [Configuración Firebase, cámara y QR](docs/FIREBASE_Y_QR.md).
+- [Modelo, flujos y migración del ERP](docs/ERP.md).
+- [Arquitectura](docs/ARQUITECTURA.md).
+- [Alcance y límites](docs/EXLAIDER_ALCANCE.md).
 
-Ambos usuarios necesitan conexión, el mismo proyecto Firebase y pertenecer a la misma empresa. No hay un reemplazo silencioso por inventarios independientes en `localStorage`. La caché de la PWA corresponde a la interfaz; no garantiza operaciones de inventario sin conexión.
-
-## Guías
-
-- [Abrir y ejecutar en Windows](LEEME_VSCODE.md).
-- [Arquitectura, estructura y modelo de datos](docs/ARQUITECTURA.md).
-- [Firebase, permisos, QR, emuladores y publicación](docs/FIREBASE_Y_QR.md).
-- [Alcance empresarial y próximas fases](docs/EXLAIDER_ALCANCE.md).
-
-No se incluyen el PDF original, datos personales de sus autores ni credenciales reales. Configurar los archivos no crea por sí solo una base de datos de producción. La validación con emuladores no sustituye una prueba física de cámara en iPhone y Android.
+La contabilidad y nómina son de gestión interna. No se implementan facturación electrónica DIAN, liquidación legal automática, transferencias bancarias ni integración contable certificada. Un pago registra un movimiento interno; no mueve dinero en una entidad financiera.

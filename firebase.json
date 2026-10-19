@@ -1,4 +1,5 @@
 {
+  "functions": [{ "source": "functions", "codebase": "exlaider-erp", "runtime": "nodejs22" }],
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
   "hosting": {
     "public": "dist",
@@ -13,6 +14,7 @@
     ]
   },
   "emulators": {
+    "functions": { "host": "127.0.0.1", "port": 5001 },
     "auth": { "host": "127.0.0.1", "port": 9099 },
     "firestore": { "host": "127.0.0.1", "port": 8080 },
     "ui": { "enabled": false },

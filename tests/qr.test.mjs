@@ -38,3 +38,17 @@ test('generador también valida datos', () => {
   assert.throws(() => makeProductQr({ ...product, stock: -1 }), Error)
   assert.throws(() => makeProductQr({ ...product, sku: '../unsafe' }), Error)
 })
+
+test('QR de materia prima conserva tipo y unidad sin exponer costos privados', () => {
+  const source = { ...product, id: undefined, kind: 'material', unit: 'cm', stock: 2500, unitCostCents: 450, stockValueCents: 1125000, unvaluedQuantity: 0 }
+  const payload = makeProductQr(source)
+  const result = parseProductQr(payload)
+  assert.equal(result.fields.kind, 'material')
+  assert.equal(result.fields.unit, 'cm')
+  assert.equal(result.fields.stock, 2500)
+  assert.equal(result.id, undefined)
+  for (const privateField of ['unitCostCents', 'stockValueCents', 'unvaluedQuantity']) assert.equal(Object.hasOwn(JSON.parse(payload), privateField), false)
+  assert.throws(() => parseProductQr(json({ id: 'ok', kind: 'material', unit: 'litro' })), Error)
+  assert.throws(() => parseProductQr(json({ id: 'ok', kind: 'finished', unit: 'cm' })), Error)
+  assert.throws(() => parseProductQr(json({ id: 'ok', unit: 'g' })), Error)
+})

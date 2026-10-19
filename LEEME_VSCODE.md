@@ -1,111 +1,85 @@
-# Abrir EXLAIDER en Visual Studio Code
+# Abrir y actualizar EXLAIDER en Windows
 
-## 1. Preparar el computador
+## 1. Abre la carpeta correcta
 
-1. Instala [VS Code](https://code.visualstudio.com/) y [Node.js 24 LTS](https://nodejs.org/). Conserva la opción **Add to PATH** del instalador.
-2. Cierra todas las ventanas de VS Code y vuelve a abrirlo para que detecte Node.js.
-3. Extrae el proyecto y elige **Archivo → Abrir carpeta**. Abre la carpeta que contiene `package.json`.
-4. Abre **Terminal → Nueva terminal**.
+Descarga el ZIP de la rama `exlaider-erp`, extráelo y en VS Code selecciona **Archivo → Abrir carpeta**. Abre la carpeta interior que contiene `package.json`, `src` y `functions`.
 
-Comprueba:
+Si estás actualizando, conserva la carpeta anterior completa y su `.env.local`. Trabaja con la nueva entrega en otra carpeta. Copia únicamente tu `.env.local` a la carpeta nueva; no necesitas copiar `node_modules` ni `dist`. Las cuentas y el inventario siguen en el proyecto Firebase, no dentro del ZIP.
+
+## 2. Instala las dependencias
+
+Instala Node.js 22 LTS y vuelve a abrir VS Code. Node24 también permite desarrollar. En **Terminal → Nueva terminal**, PowerShell:
 
 ```powershell
 node --version
 npm.cmd --version
-```
-
-La primera versión debe comenzar por `v24`. Si no reconoce un comando, revisa la instalación y vuelve a abrir VS Code. `npm.cmd` evita el bloqueo de scripts de PowerShell; no necesitas cambiar la política de ejecución.
-
-## 2. Instalar
-
-Desde la carpeta principal del proyecto:
-
-```powershell
+Get-Location
+Get-ChildItem -Name
 npm.cmd ci
+npm.cmd ci --prefix functions
 ```
 
-No necesitas instalar React o Vite globalmente.
+Si sólo aparece otra carpeta con el mismo nombre, entra a esa carpeta primero. El ZIP incluye ambos `package-lock.json`: `npm ci` debe ejecutarse donde está `package.json`. `npm.cmd` evita el bloqueo de `npm.ps1` sin cambiar la política de Windows.
 
-## 3. Preparar Firebase
+## 3. Conserva o crea la configuración
 
-Sigue [docs/FIREBASE_Y_QR.md](docs/FIREBASE_Y_QR.md): crea el proyecto, habilita correo/contraseña y Firestore, agrega los usuarios y sus documentos de miembro y publica las reglas **antes de usar datos reales**.
+Si ya tenías `.env.local`, úsalo. En una instalación nueva:
 
 ```powershell
 Copy-Item .env.example .env.local
 ```
 
-Abre `.env.local`, completa los valores de tu aplicación web Firebase y conserva `VITE_FIREBASE_COMPANY_ID=exlaider-jeans`. No compartas `.env.local` ni agregues claves de cuenta de servicio.
+Completa sus cuatro valores de Firebase y conserva `VITE_FIREBASE_COMPANY_ID=exlaider-jeans`. La región de Functions es `us-east1`. No pongas claves privadas ni cuentas de servicio en variables `VITE_`.
 
-## 4. Iniciar
+## 4. Elige prueba local o nube
+
+**Prueba local sin facturación:** instala Java21. En una terminal ejecuta `npm.cmd run emulators` y en otra `npm.cmd run dev:emulator`. Crea una cuenta desde la página y autoriza su UID con:
 
 ```powershell
-npm.cmd run dev
+node scripts/approve-emulator.mjs TU_UID admin
 ```
 
-Abre la dirección **Local** que aparece. Inicia sesión con una cuenta de Firebase Authentication autorizada en `organizations/exlaider-jeans/members/{UID}`. Registrarse no concede acceso ni permisos de administrador.
+Los emuladores son temporales; `demo-inventario` no envía operaciones a tu empresa real.
 
-Mantén la terminal abierta. Para detener Vite pulsa **Ctrl+C**. Si cambias `.env.local`, reinicia Vite.
+**Nube:** esta versión utiliza Firebase Functions para proteger y validar las operaciones, y requiere **Blaze**. Si tu proyecto sigue en Spark, conserva la versión publicada mientras pruebas ésta con emuladores. Cambiar el plan y publicar son pasos distintos de descargar o probar el código.
 
-## 5. Verla en el celular
+Cuando tu proyecto tenga Functions disponible y hayas revisado la migración de [docs/ERP.md](docs/ERP.md):
 
-Para revisar la interfaz en la misma red Wi-Fi:
+```powershell
+npm.cmd run firebase -- login
+npm.cmd run lint -- --max-warnings=0
+npm.cmd test
+npm.cmd run build
+npm.cmd run firebase -- deploy --project exlaider-inventario --only functions
+npm.cmd run firebase -- deploy --project exlaider-inventario --only "firestore,hosting"
+```
+
+**Usa tu ID de proyecto** si es distinto de `exlaider-inventario`. Antes del último comando, comprueba que `.env.local` apunta al mismo proyecto. Programa una ventana de actualización: al publicar las reglas nuevas, la interfaz anterior ya no podrá escribir directamente en Firestore. Publica la nueva interfaz y las reglas en esa misma ventana. Esta entrega no se ha desplegado en tu sitio automáticamente.
+
+## 5. Entra y migra el inventario
+
+Usa tu cuenta administradora existente. En Inventario aparece una sección para los productos anteriores. **Migrar inventario anterior** permite revisar y cambiar referencias conflictivas antes de confirmar, hasta20 productos por operación. El backend conserva los documentos anteriores y los IDs usados por los QR; no borra stock ni duplica una migración ya confirmada. Los costos anteriores desconocidos quedan pendientes: registra el costo real con **Valorar existencias** o con compras nuevas, sin usar el precio de venta como costo.
+
+Autoriza cuentas creadas en Authentication desde **Usuarios** con su UID exacto y rol `admin`, `operator` o `viewer`. El primer administrador conserva su documento `organizations/exlaider-jeans/members/UID`, con `active` booleano `true` y `role` texto `admin`.
+
+## 6. Computador y celular
+
+Abre `https://exlaider-inventario.web.app/` después de publicar. Ambos dispositivos usan el mismo proyecto, empresa y cuentas autorizadas; no necesitan estar en la misma red. En iPhone abre en Safari y permite la cámara para ese sitio. HTTPS es necesario para cámara. Puedes añadir la página a la pantalla de inicio. La cámara física se debe probar en tu teléfono; el código incluye selección de cámara y alternativa **Leer imagen QR**.
+
+Para ver únicamente la interfaz desde la red local:
 
 ```powershell
 npm.cmd run dev -- --host 0.0.0.0
 ```
 
-Abre la dirección **Network** desde el navegador del celular. Si Windows solicita acceso, permite la red privada. Para usar la cámara móvil utiliza la URL **HTTPS** que obtendrás al [publicar en Firebase Hosting](docs/FIREBASE_Y_QR.md#publicar-con-https).
+La dirección HTTP de la red local no habilita la cámara en iPhone; usa el sitio HTTPS para escanear. Las operaciones se deshabilitan sin conexión y sólo se confirman cuando responde el servidor.
 
-En Android, Chrome puede ofrecer **Instalar aplicación** o **Añadir a pantalla de inicio**. En iPhone abre la URL HTTPS en Safari y elige **Compartir → Añadir a pantalla de inicio**. Ambos equipos comparten productos si usan el mismo proyecto Firebase y empresa con cuentas autorizadas.
-
-## 6. Registrar y escanear
-
-1. Registra una prenda con referencia, talla, color, lote y un SKU único.
-2. Genera su QR.
-3. En el celular abre el lector y permite la cámara, carga una imagen o pega el contenido.
-4. Revisa el producto detectado y confirma la cantidad. Si habilitas «Ingreso directo», cada lectura de un producto existente suma una unidad.
-5. Comprueba que el computador recibe el producto o stock actualizado sin recargar.
-
-Los usuarios con rol `viewer` consultan sin modificar.
-
-## Desarrollo con emuladores
-
-Instala Java 21 y comprueba `java -version`. En la primera terminal:
+## 7. Comprobaciones
 
 ```powershell
-npm.cmd run emulators
-```
-
-En otra terminal:
-
-```powershell
-npm.cmd run dev:emulator
-```
-
-Regístrate desde la aplicación local y copia el UID que aparece en «Acceso pendiente de aprobación». En otra terminal ejecuta `node scripts/approve-emulator.mjs TU_UID admin`. El helper solo autoriza miembros en el emulador local `demo-inventario`, nunca en producción. Los detalles están en [la guía](docs/FIREBASE_Y_QR.md#emuladores-locales). No uses contraseñas reales para desarrollo.
-
-## Comprobaciones
-
-```powershell
-npm.cmd run lint -- --max-warnings=0
-npm.cmd test
 npm.cmd run test:cloud
-npm.cmd run build
+npm.cmd run build -- --mode emulator
+npm.cmd run test:browser
 ```
 
-`test:cloud` requiere Java 21. Para revisar `dist`, ejecuta `npm.cmd run preview`. `node_modules` se instala con `npm.cmd ci`; no viene incluido en el código.
-
-## Problemas frecuentes
-
-| Problema | Acción |
-| --- | --- |
-| `npm` no se reconoce | Instala Node.js y abre de nuevo todas las ventanas de VS Code. |
-| `npm.ps1` bloqueado | Usa `npm.cmd`. |
-| Configuración Firebase incompleta | Completa `.env.local` y reinicia Vite. |
-| Cuenta sin acceso | Autoriza su UID como miembro activo de la empresa. |
-| `permission-denied` | Revisa proyecto, empresa, rol, membresía y publicación de reglas. |
-| Cámara no disponible | Abre HTTPS, concede permiso y cierra otras aplicaciones que usen la cámara. Usa una imagen como alternativa. |
-| No llega un cambio | Revisa conexión, mismo proyecto/empresa y los errores mostrados. |
-| Emulador falla por Java | Instala Java 21 y vuelve a abrir la terminal. |
-
-El proyecto no incluye una cuenta Firebase ni un despliegue real ya configurados. La cámara debe verificarse físicamente con los dispositivos que usará la empresa.
+Requieren Java21 y Chrome/Chromium. `npm.cmd run build` vuelve a crear la compilación de producción cuando termines de probar. Consulta los errores comunes y el contenido del QR en [docs/FIREBASE_Y_QR.md](docs/FIREBASE_Y_QR.md).
