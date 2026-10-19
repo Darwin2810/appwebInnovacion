@@ -24,8 +24,11 @@ jobs:
       - run: npm run lint -- --max-warnings=0 && npm test
       - run: node scripts/ci-check.mjs test:cloud
       - run: npm run build
+        if: ${{ !cancelled() }}
       - run: npm run build -- --mode emulator
+        if: ${{ !cancelled() }}
       - run: node scripts/ci-check.mjs test:browser
+        if: ${{ !cancelled() }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
