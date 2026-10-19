@@ -41,17 +41,19 @@ export default function App() {
     if (!canWrite) throw new Error('Espera la conexión con la nube para guardar.')
     if (dialog.product) await updateProduct(user.uid, dialog.product.id, data)
     else await createProduct(user.uid, data)
-    setNotice(dialog.product ? 'Producto actualizado.' : 'Producto añadido al inventario.'); close()
+    setNotice(dialog.product ? 'Producto actualizado.' : 'Producto añadido al inventario.')
+    setDialog(current => current === dialog ? null : current)
   }
   async function receive(quantity) {
     if (!canWrite) throw new Error('Espera la conexión con la nube para registrar el ingreso.')
     await receiveProduct(user.uid, dialog.product.id, quantity)
-    setNotice(`Ingreso registrado: ${quantity} unidades.`); close()
+    setNotice(`Ingreso registrado: ${quantity} unidades.`)
+    setDialog(current => current === dialog ? null : current)
   }
   async function remove() {
     if (!canWrite) { setOperationError('Espera la conexión con la nube.'); return }
     setBusy(true); setOperationError('')
-    try { await deleteProduct(user.uid, dialog.product.id); setNotice('Producto eliminado.'); close() }
+    try { await deleteProduct(user.uid, dialog.product.id); setNotice('Producto eliminado.'); setDialog(current => current === dialog ? null : current) }
     catch (err) { setOperationError(message(err)) } finally { setBusy(false) }
   }
   async function scan(raw) {
@@ -64,13 +66,13 @@ export default function App() {
     }
     if (!product && parsed.sku) product = await getProductBySku(user.uid, parsed.sku)
     if (product) {
-      if (direct) { await receiveProduct(user.uid, product.id, 1); setNotice(`Ingreso registrado: 1 unidad de ${product.name}.`); close() }
-      else setDialog({ mode: 'receive', product })
+      if (direct) { await receiveProduct(user.uid, product.id, 1); setNotice(`Ingreso registrado: 1 unidad de ${product.name}.`); setDialog(current => current === dialog ? null : current) }
+      else setDialog(current => current === dialog ? { mode: 'receive', product } : current)
       return
     }
     if (parsed.kind === 'sku' || !parsed.fields?.name) throw new Error('Este código no está registrado. Crea primero el producto o usa un QR con sus datos completos.')
     setNotice('Datos leídos del QR. Revisa la información antes de guardar.')
-    setDialog({ mode: 'create', initialValues: { ...parsed.fields, sku: parsed.sku || '' } })
+    setDialog(current => current === dialog ? { mode: 'create', initialValues: { ...parsed.fields, sku: parsed.sku || '' } } : current)
   }
   async function logout() {
     close(); setNotice(''); setOperationError('')

@@ -33,7 +33,9 @@ worker.addEventListener('install', (event) => {
       .map((match) => new URL(match[1], worker.location.origin))
       .filter(isApplicationAsset)
       .map((url) => url.href)
-    await cache.addAll([...new Set([...STATIC_URLS, ...entryAssets])])
+    const assetUrls = [...STATIC_URLS, ...entryAssets]
+      .map((url) => new URL(url, worker.location.origin).href)
+    await cache.addAll([...new Set(assetUrls)])
     await worker.skipWaiting()
   })())
 })
