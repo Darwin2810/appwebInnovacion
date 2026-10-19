@@ -17,5 +17,12 @@ child.on('exit', code => {
   if (!process.env.GITHUB_ACTIONS) return
   const clean = output.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '')
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### ${task}: ${code === 0 ? 'passed' : 'failed'}\n\n<pre>${clean.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</pre>\n`)
-  if (code !== 0) console.log(`::error title=${task}::${clean.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')}`)
+  if (code !== 0) {
+    // GitHub truncates a single annotation; retain the failure at the end too.
+    const tail = clean.slice(-18000)
+    for (let index = 0; index < tail.length; index += 2700) {
+      const part = tail.slice(index, index + 2700).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')
+      console.log(`::error title=${task} diagnostics ${1 + index / 2700}::${part}`)
+    }
+  }
 })
