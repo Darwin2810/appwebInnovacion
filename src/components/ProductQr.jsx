@@ -19,7 +19,7 @@ export default function ProductQr({ product }) {
   useEffect(() => {
     let cancelled = false
     if (!payload) return
-    const options = { errorCorrectionLevel: 'M', width: 360, margin: 3 }
+    const options = { errorCorrectionLevel: 'M', width: 720, margin: 4 }
     async function generate() {
       try {
         const image = await QRCode.toDataURL(payload, options)

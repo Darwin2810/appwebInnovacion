@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { stripVTControlCharacters } from 'node:util'
 import path from 'node:path'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -16,25 +17,35 @@ for (const stream of [server.stdout, server.stderr]) stream.on('data', chunk => 
 
 async function ready() {
   const until = Date.now() + 20000
+  const observed = { ownPreviewAnnounced: false }
   while (Date.now() < until) {
     if (startupError) throw startupError
     if (server.exitCode !== null) throw new Error(`Preview exited before readiness (${server.exitCode}). ${startupLog}`)
     // Require readiness from our own strict-port preview, not an unrelated service.
-    if (/Local:.*5173/.test(startupLog)) {
+    // Vite colors "Local" independently from ":" in CI output.
+    observed.ownPreviewAnnounced = /Local:\s+http:\/\/127\.0\.0\.1:5173\//.test(stripVTControlCharacters(startupLog))
+    if (observed.ownPreviewAnnounced) {
       try {
         const response = await fetch(appUrl, { signal: AbortSignal.timeout(1000) })
+        observed.documentStatus = response.status
         const html = await response.text()
         const module = html.match(/<script\b[^>]*type="module"[^>]*src="([^"]+)"/)
+        observed.compiledModule = module?.[1] || null
         if (response.ok && module?.[1]?.startsWith('/assets/')) {
           const asset = await fetch(new URL(module[1], appUrl), { signal: AbortSignal.timeout(1000) })
+          observed.assetStatus = asset.status
           const source = await asset.text()
-          if (asset.ok && (setupSmoke || source.includes('demo-inventario'))) return
+          observed.emulatorMarker = source.includes('demo-inventario')
+          if (asset.ok && (setupSmoke || observed.emulatorMarker)) {
+            console.log(`Preview ready: ${module[1]}${setupSmoke ? '' : ' (demo-inventario)'}`)
+            return
+          }
         }
-      } catch { /* Retry only while the preview is still starting. */ }
+      } catch (error) { observed.requestError = error.message }
     }
     await pause(100)
   }
-  throw new Error('Built emulator application did not become ready. Run npm run build -- --mode emulator before this command.')
+  throw new Error(`Built emulator application did not become ready. Run npm run build -- --mode emulator before this command.\nReadiness diagnostics: ${JSON.stringify(observed)}\nPreview output:\n${stripVTControlCharacters(startupLog).slice(-4000)}`)
 }
 const stop = signal => { browserTest?.kill(signal); server.kill(signal) }
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop(signal))
