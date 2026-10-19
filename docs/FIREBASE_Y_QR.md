@@ -176,6 +176,8 @@ La recepción utiliza `receiveProduct(uid, productId, quantity)`, una transacci�
 
 Para la operación móvil publica con HTTPS. Si no se ve la cámara, revisa permisos del sitio, selecciona otra cámara si el dispositivo lo permite y cierra aplicaciones que la estén utilizando. La lectura de una imagen y el ingreso de texto permiten continuar sin cámara.
 
+El selector obtiene los dispositivos con `navigator.mediaDevices.enumerateDevices()`. Mantiene una sola captura por inicio del lector; listar las cámaras no abre una captura auxiliar. Esta precaución evita que la enumeración interrumpa el video activo en navegadores móviles. Después de actualizar el lector, compila y publica Hosting de nuevo y recarga la página del celular para cargar el código actualizado.
+
 La compatibilidad final depende del navegador y el dispositivo. Debe realizarse un piloto físico en los iPhone, Android y computadores reales de la empresa; una prueba automatizada de QR no certifica ese hardware.
 
 ## Publicar con HTTPS

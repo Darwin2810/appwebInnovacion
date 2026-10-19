@@ -9,6 +9,16 @@ function cameraError(error) {
   return 'No se pudo abrir la cámara. Comprueba los permisos, elige otra cámara o utiliza una imagen del QR.'
 }
 
+async function listAvailableCameras() {
+  if (!navigator.mediaDevices?.enumerateDevices) return []
+  // Html5Qrcode.getCameras() opens and stops a second capture stream. On iOS
+  // that can interrupt the active preview, so enumerate the devices directly.
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  return devices
+    .filter((device) => device.kind === 'videoinput' && device.deviceId)
+    .map((device) => ({ id: device.deviceId, label: device.label }))
+}
+
 export default function QrScanner({ onScan, onClose }) {
   const reactId = useId()
   const readerId = `qr-reader-${reactId.replace(/[^A-Za-z0-9_-]/g, '')}`
@@ -111,14 +121,14 @@ export default function QrScanner({ onScan, onClose }) {
         setScanning(true)
         setStatus('Apunta al QR y mantenlo dentro del recuadro.')
         try {
-          const available = await Html5Qrcode.getCameras()
+          const available = await listAvailableCameras()
           if (mountedRef.current) setCameras(available)
         } catch { /* Enumeration may be unavailable while scanning remains usable. */ }
       })
     } catch (failure) {
       if (mountedRef.current) setError(cameraError(failure))
       try {
-        const available = await Html5Qrcode.getCameras()
+        const available = await listAvailableCameras()
         if (mountedRef.current && available.length) {
           setCameras(available)
           setCameraId(available[0].id)
