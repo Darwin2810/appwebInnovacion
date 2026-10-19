@@ -1,47 +1,111 @@
-# Ejecutar el inventario en Visual Studio Code
+# Abrir EXLAIDER en Visual Studio Code
 
-## Requisitos
+## 1. Preparar el computador
 
-- Visual Studio Code.
-- Node.js 24 LTS, que incluye npm. Puedes descargarlo en https://nodejs.org/.
+1. Instala [VS Code](https://code.visualstudio.com/) y [Node.js 24 LTS](https://nodejs.org/). Conserva la opción **Add to PATH** del instalador.
+2. Cierra todas las ventanas de VS Code y vuelve a abrirlo para que detecte Node.js.
+3. Extrae el proyecto y elige **Archivo → Abrir carpeta**. Abre la carpeta que contiene `package.json`.
+4. Abre **Terminal → Nueva terminal**.
 
-## Abrir y ejecutar
+Comprueba:
 
-1. Extrae este ZIP.
-2. En VS Code, selecciona Archivo > Abrir carpeta y abre `appwebInnovacion`.
-3. Abre Terminal > Nueva terminal. Debes estar en la carpeta que contiene `package.json`.
-4. Instala exactamente las dependencias del archivo de bloqueo:
+```powershell
+node --version
+npm.cmd --version
+```
 
-   npm ci
+La primera versión debe comenzar por `v24`. Si no reconoce un comando, revisa la instalación y vuelve a abrir VS Code. `npm.cmd` evita el bloqueo de scripts de PowerShell; no necesitas cambiar la política de ejecución.
 
-5. Inicia la aplicación:
+## 2. Instalar
 
-   npm run dev
+Desde la carpeta principal del proyecto:
 
-6. Abre en tu navegador la dirección que aparece en la terminal de Vite.
+```powershell
+npm.cmd ci
+```
 
-Deja abierta esa terminal mientras uses la aplicación. Para detenerla, pulsa Ctrl+C.
-No necesitas instalar dependencias globales de React ni de Vite.
+No necesitas instalar React o Vite globalmente.
 
-Si PowerShell en Windows bloquea npm.ps1, selecciona una terminal de tipo Command Prompt (CMD) en VS Code, o usa `npm.cmd ci` y `npm.cmd run dev`.
+## 3. Preparar Firebase
 
-## Comprobaciones opcionales
+Sigue [docs/FIREBASE_Y_QR.md](docs/FIREBASE_Y_QR.md): crea el proyecto, habilita correo/contraseña y Firestore, agrega los usuarios y sus documentos de miembro y publica las reglas **antes de usar datos reales**.
 
-   npm run lint -- --max-warnings=0
-   npm run build
-   npm run preview
+```powershell
+Copy-Item .env.example .env.local
+```
 
-`build` genera la carpeta `dist`; `preview` permite revisar ese resultado localmente. No es un servidor de producción.
+Abre `.env.local`, completa los valores de tu aplicación web Firebase y conserva `VITE_FIREBASE_COMPANY_ID=exlaider-jeans`. No compartas `.env.local` ni agregues claves de cuenta de servicio.
 
-## Funciones incluidas
+## 4. Iniciar
 
-- Añadir y editar productos, categorías, códigos SKU, existencias y precios.
-- Buscar por nombre, código o categoría y filtrar por categoría.
-- Detectar stock bajo y consultar el valor del inventario.
-- Eliminar productos con confirmación.
-- Guardar datos al recargar mediante el almacenamiento local del navegador.
-- Interfaz adaptable a escritorio y móvil.
+```powershell
+npm.cmd run dev
+```
 
-Los precios se muestran en pesos colombianos (COP). Los datos se guardan solo en este navegador y en la misma dirección de la aplicación; no se sincronizan entre equipos ni navegadores. Borrar el almacenamiento del sitio también borra los productos. Esta versión no incluye backend ni autenticación.
+Abre la dirección **Local** que aparece. Inicia sesión con una cuenta de Firebase Authentication autorizada en `organizations/exlaider-jeans/members/{UID}`. Registrarse no concede acceso ni permisos de administrador.
 
-El ZIP incluye todos los archivos fuente y el package-lock.json original. Las carpetas `node_modules`, `dist`, `.git` y los archivos del entorno en la nube no se incluyen; `npm ci` genera las dependencias necesarias en tu equipo.
+Mantén la terminal abierta. Para detener Vite pulsa **Ctrl+C**. Si cambias `.env.local`, reinicia Vite.
+
+## 5. Verla en el celular
+
+Para revisar la interfaz en la misma red Wi-Fi:
+
+```powershell
+npm.cmd run dev -- --host 0.0.0.0
+```
+
+Abre la dirección **Network** desde el navegador del celular. Si Windows solicita acceso, permite la red privada. Para usar la cámara móvil utiliza la URL **HTTPS** que obtendrás al [publicar en Firebase Hosting](docs/FIREBASE_Y_QR.md#publicar-con-https).
+
+En Android, Chrome puede ofrecer **Instalar aplicación** o **Añadir a pantalla de inicio**. En iPhone abre la URL HTTPS en Safari y elige **Compartir → Añadir a pantalla de inicio**. Ambos equipos comparten productos si usan el mismo proyecto Firebase y empresa con cuentas autorizadas.
+
+## 6. Registrar y escanear
+
+1. Registra una prenda con referencia, talla, color, lote y un SKU único.
+2. Genera su QR.
+3. En el celular abre el lector y permite la cámara, carga una imagen o pega el contenido.
+4. Revisa el producto detectado y confirma la cantidad. Si habilitas «Ingreso directo», cada lectura de un producto existente suma una unidad.
+5. Comprueba que el computador recibe el producto o stock actualizado sin recargar.
+
+Los usuarios con rol `viewer` consultan sin modificar.
+
+## Desarrollo con emuladores
+
+Instala Java 21 y comprueba `java -version`. En la primera terminal:
+
+```powershell
+npm.cmd run emulators
+```
+
+En otra terminal:
+
+```powershell
+npm.cmd run dev:emulator
+```
+
+Regístrate desde la aplicación local y copia el UID que aparece en «Acceso pendiente de aprobación». En otra terminal ejecuta `node scripts/approve-emulator.mjs TU_UID admin`. El helper solo autoriza miembros en el emulador local `demo-inventario`, nunca en producción. Los detalles están en [la guía](docs/FIREBASE_Y_QR.md#emuladores-locales). No uses contraseñas reales para desarrollo.
+
+## Comprobaciones
+
+```powershell
+npm.cmd run lint -- --max-warnings=0
+npm.cmd test
+npm.cmd run test:cloud
+npm.cmd run build
+```
+
+`test:cloud` requiere Java 21. Para revisar `dist`, ejecuta `npm.cmd run preview`. `node_modules` se instala con `npm.cmd ci`; no viene incluido en el código.
+
+## Problemas frecuentes
+
+| Problema | Acción |
+| --- | --- |
+| `npm` no se reconoce | Instala Node.js y abre de nuevo todas las ventanas de VS Code. |
+| `npm.ps1` bloqueado | Usa `npm.cmd`. |
+| Configuración Firebase incompleta | Completa `.env.local` y reinicia Vite. |
+| Cuenta sin acceso | Autoriza su UID como miembro activo de la empresa. |
+| `permission-denied` | Revisa proyecto, empresa, rol, membresía y publicación de reglas. |
+| Cámara no disponible | Abre HTTPS, concede permiso y cierra otras aplicaciones que usen la cámara. Usa una imagen como alternativa. |
+| No llega un cambio | Revisa conexión, mismo proyecto/empresa y los errores mostrados. |
+| Emulador falla por Java | Instala Java 21 y vuelve a abrir la terminal. |
+
+El proyecto no incluye una cuenta Firebase ni un despliegue real ya configurados. La cámara debe verificarse físicamente con los dispositivos que usará la empresa.

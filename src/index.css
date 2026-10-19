@@ -26,7 +26,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -47,20 +48,26 @@ button:disabled {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 a:focus-visible {
   outline: 3px solid #9ec8b4;
   outline-offset: 3px;
 }
 
 input,
-select {
+select,
+textarea {
   color: var(--ink);
 }
 
-input::placeholder {
+input::placeholder,
+textarea::placeholder {
   color: #84908e;
   opacity: 1;
 }
+
+textarea { resize: vertical; }
+a { color: var(--green-dark); text-underline-offset: 3px; }
 
 svg {
   display: block;
