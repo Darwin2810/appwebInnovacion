@@ -1,10 +1,10 @@
 // Development helper. The host and demo project are fixed deliberately.
 // This request targets only the local Firestore emulator, never Firebase cloud.
 const [uid, role = 'admin', ...extra] = process.argv.slice(2)
-const roles = new Set(['admin', 'operator', 'viewer'])
+const roles = new Set(['admin', 'operator', 'seller', 'viewer'])
 
 if (!uid || !/^[A-Za-z0-9_-]{1,128}$/.test(uid) || !roles.has(role) || extra.length) {
-  console.error('Uso: node scripts/approve-emulator.mjs UID [admin|operator|viewer]')
+  console.error('Uso: node scripts/approve-emulator.mjs UID [admin|operator|seller|viewer]')
   process.exitCode = 1
 } else {
   const endpoint = `http://127.0.0.1:8080/v1/projects/demo-inventario/databases/(default)/documents/organizations/exlaider-jeans/members/${uid}`

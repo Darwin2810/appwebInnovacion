@@ -73,7 +73,7 @@ function canonical(value) {
 }
 function authorize(snapshot, roles) {
   const member = snapshot.data()
-  if (!snapshot.exists || member.active !== true || !['admin', 'operator', 'viewer'].includes(member.role) || !roles.includes(member.role)) fail('permission-denied', 'Tu cuenta no tiene permiso para esta operación.')
+  if (!snapshot.exists || member.active !== true || !['admin', 'operator', 'seller', 'viewer'].includes(member.role) || !roles.includes(member.role)) fail('permission-denied', 'Tu cuenta no tiene permiso para esta operación.')
   return member.role
 }
 export async function withCommand(db, uid, input, handlers) {
@@ -102,13 +102,13 @@ export async function withCommand(db, uid, input, handlers) {
     if (command.exists) {
       const old = command.data()
       if (old.uid !== uid || old.action !== action || old.payloadHash !== hash) fail('already-exists', 'Esta solicitud ya se utilizó con otros datos. Inicia una operación nueva.')
-      return { ...old.result, replayed: true }
+      return { ...(handler.present ? handler.present(old.result, role) : old.result), replayed: true }
     }
     const ctx = { db, uid, role, companyId, org, now: Timestamp.now(), commandId, action }
     const result = await handler.run(tx, ctx, payload)
     if (!result || typeof result !== 'object') fail('internal', 'La operación no devolvió un resultado.')
     tx.create(org.collection('commands').doc(commandId), { uid, action, payloadHash: hash, result, ...created(ctx) })
     tx.create(ref(ctx, 'audit'), { action, entityId: result.id || result.variantId || result.referenceKey || '', actor: uid, role, commandId, ...created(ctx) })
-    return result
+    return handler.present ? handler.present(result, role) : result
   }, { maxAttempts: 10 })
 }

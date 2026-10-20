@@ -12,7 +12,7 @@ const formatMoney = value => {
 }
 const today = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` }
 const month = () => today().slice(0, 7)
-const states = { posted: 'Registrada', void: 'Anulada', planned: 'Planeada', in_progress: 'En producción', completed: 'Terminada', cancelled: 'Cancelada', present: 'Presente', absent: 'Ausente', leave: 'Permiso', paid: 'Pagada', pending: 'Pendiente', admin: 'Administrador', operator: 'Operador', viewer: 'Consulta' }
+const states = { posted: 'Registrada', void: 'Anulada', planned: 'Planeada', in_progress: 'En producción', completed: 'Terminada', cancelled: 'Cancelada', present: 'Presente', absent: 'Ausente', leave: 'Permiso', paid: 'Pagada', pending: 'Pendiente', admin: 'Administrador', operator: 'Operador', seller: 'Vendedor', viewer: 'Usuario' }
 const accounts = { 1105: 'Caja / bancos', 1305: 'Clientes por cobrar', 1405: 'Materias primas', 1430: 'Producción en proceso', 1435: 'Productos terminados', 2205: 'Proveedores por pagar', 2505: 'Nómina por pagar', 2365: 'Deducciones por pagar', 3105: 'Saldo inicial / patrimonio', 4135: 'Ingresos por ventas', 6135: 'Costo de ventas', 5105: 'Gastos de personal', 5195: 'Otros gastos', 4205: 'Otros ingresos' }
 
 function cents(value, label = 'Importe') {
@@ -38,8 +38,13 @@ function labelProduct(p) {
   return [p?.name || 'Variante no disponible', p?.reference || p?.sku, p?.size && `Talla ${p.size}`, p?.color, p?.lot && `Lote ${p.lot}`].filter(Boolean).join(' · ')
 }
 function productOptions(data, kind) {
-  return (data.products || []).filter(p => !p.legacy && p.active !== false && (!kind || p.kind === kind))
+  return (data.products || []).filter(p => !p.legacy && !p.deleted && p.active !== false && p.referenceActive !== false && (!kind || p.kind === kind))
 }
+function catalogPriceCents(product) { return product?.priceCents ?? Math.round((product?.price || 0) * 100) }
+function decimalCents(value) { return `${Math.floor(value / 100)}.${String(value % 100).padStart(2, '0')}` }
+function activeSellers(data) { return (data.members || []).filter(member => member.role === 'seller' && member.active === true) }
+function memberUid(member) { return member.id || member.uid }
+function sellerLabel(member) { return `${member.name || member.email || 'Vendedor'} · ${memberUid(member)}` }
 function resolveProduct(data, id) {
   const product = (data.products || []).find(p => p.id === id)
   if (product) return product
@@ -97,13 +102,13 @@ function StatCards({ values }) {
   return <div className="erp-stats">{values.map(([label, value, note]) => <article className="erp-stat" key={label}><span>{label}</span><strong>{value}</strong>{note && <small>{note}</small>}</article>)}</div>
 }
 function Status({ value }) { return <span className={`erp-status erp-status-${value}`}>{states[value] || value || '—'}</span> }
-function LineEditor({ lines, setLines, products, purchase = false, material = false, unitLabel = 'Cantidad' }) {
+function LineEditor({ lines, setLines, products, purchase = false, material = false, unitLabel = 'Cantidad', readOnlyPrice = false }) {
   function update(index, patch) { setLines(current => current.map((line, i) => i === index ? { ...line, ...patch } : line)) }
   function choose(index, id) {
     const product = products.find(p => p.id === id)
-    update(index, { variantId: id, ...(purchase || material ? {} : { amount: String((product?.priceCents ?? Math.round((product?.price || 0) * 100)) / 100) }) })
+    update(index, { variantId: id, ...(purchase || material ? {} : { amount: decimalCents(catalogPriceCents(product)) }) })
   }
-  return <div className="erp-lines" aria-label={material ? 'Materiales de la receta' : 'Líneas de productos'}>{lines.map((line, index) => <div className={`erp-line ${material ? 'erp-material-line' : ''}`} key={line.key}><ProductSelect label={`${material ? 'Material' : 'Variante'} ${index + 1}`} products={products} value={line.variantId} onChange={id => choose(index, id)} /><Field label={`${unitLabel} ${index + 1}`} type="number" min="1" max="1000000000" step="1" value={line.quantity} onChange={e => update(index, { quantity: e.target.value })} required />{!material && <MoneyField label={`${purchase ? 'Costo' : 'Precio'} unitario ${index + 1}`} value={line.amount} onChange={e => update(index, { amount: e.target.value })} />}<button type="button" className="secondary-button erp-remove" disabled={lines.length === 1} aria-label={`Quitar línea ${index + 1}`} onClick={() => setLines(current => current.filter((_, i) => i !== index))}>Quitar</button></div>)}<button className="secondary-button" type="button" disabled={lines.length >= 20} onClick={() => setLines(current => [...current, freshLine()])}>Añadir {material ? 'material' : 'línea'}</button><p className="erp-help">Máximo 20 líneas. Cada combinación de talla, color y lote tiene su propio stock.</p></div>
+  return <div className="erp-lines" aria-label={material ? 'Materiales de la receta' : 'Líneas de productos'}>{lines.map((line, index) => <div className={`erp-line ${material ? 'erp-material-line' : ''}`} key={line.key}><ProductSelect label={`${material ? 'Material' : 'Variante'} ${index + 1}`} products={products} value={line.variantId} onChange={id => choose(index, id)} /><Field label={`${unitLabel} ${index + 1}`} type="number" min="1" max="1000000000" step="1" value={line.quantity} onChange={e => update(index, { quantity: e.target.value })} required />{!material && <MoneyField label={`${purchase ? 'Costo' : 'Precio'} unitario ${index + 1}`} value={readOnlyPrice ? decimalCents(catalogPriceCents(products.find(product => product.id === line.variantId))) : line.amount} readOnly={readOnlyPrice} onChange={e => update(index, { amount: e.target.value })} />}<button type="button" className="secondary-button erp-remove" disabled={lines.length === 1} aria-label={`Quitar línea ${index + 1}`} onClick={() => setLines(current => current.filter((_, i) => i !== index))}>Quitar</button></div>)}<button className="secondary-button" type="button" disabled={lines.length >= 20} onClick={() => setLines(current => [...current, freshLine()])}>Añadir {material ? 'material' : 'línea'}</button><p className="erp-help">Máximo 20 líneas. Cada combinación de talla, color y lote tiene su propio stock.{readOnlyPrice && ' El precio vigente del catálogo lo define el administrador y no admite descuentos en esta cuenta.'}</p></div>
 }
 function freshLine() { return { key: newRequestId(), variantId: '', quantity: '1', amount: '0' } }
 function estimateLines(lines) {
@@ -141,12 +146,12 @@ function ContactSelect({ data, type, value, onChange }) {
 
 export function DashboardPanel({ data }) {
   const journals = data.journals || []
-  const low = (data.products || []).filter(p => p.active !== false && p.stock <= p.minStock)
+  const low = (data.products || []).filter(p => !p.deleted && p.active !== false && p.referenceActive !== false && p.stock <= p.minStock)
   const unknownSales = (data.sales || []).filter(sale => sale.status !== 'void' && sale.hasUnvaluedCost)
   const revenue = -balance(journals, '4135')
   const costs = balance(journals, '6135')
   const production = (data.productionOrders || []).filter(order => ['planned', 'in_progress'].includes(order.status))
-  const unvalued = (data.products || []).filter(p => p.stock > 0 && !(data.costs || []).some(item => item.id === p.id && item.stockValueCents > 0 && !(item.unvaluedQuantity > 0)))
+  const unvalued = (data.products || []).filter(p => !p.deleted && p.stock > 0 && !(data.costs || []).some(item => item.id === p.id && item.stockValueCents > 0 && !(item.unvaluedQuantity > 0)))
   return <Panel title="Dirección de la empresa" description="Inventario, dinero y operaciones comparten los mismos registros en tiempo real."><StatCards values={[
     ['Inventario a costo', formatMoney(sum(data.costs, 'stockValueCents')), 'Costo registrado de materiales y prendas'],
     ['Ventas netas', formatMoney(revenue), 'Incluye anulaciones mediante asientos inversos'],
@@ -159,16 +164,43 @@ export function DashboardPanel({ data }) {
   ]} />{unvalued.length > 0 && <p className="feedback erp-warning" role="status">Hay {unvalued.length} variantes con existencias sin costo registrado. La valoración y el margen dependen de los costos ingresados; el precio de venta no se usa como costo.</p>}{unknownSales.length > 0 && <p className="feedback erp-warning" role="status">{unknownSales.length} ventas vigentes incluyen unidades con costo desconocido. El margen registrado es parcial; valorar el stock actual no modifica el costo histórico de esas ventas.</p>}<div className="erp-two-columns"><Records title="Atención de inventario" rows={low} columns={[{ label: 'Variante', render: labelProduct }, { label: 'Disponible / mínimo', render: p => `${count.format(p.stock)} / ${count.format(p.minStock)}` }]} empty="Todas las variantes están por encima de su mínimo." /><Records title="Producción pendiente" rows={production} columns={[{ label: 'Orden', render: order => order.id }, { label: 'Producto', render: order => labelProduct(resolveProduct(data, order.outputVariantId)) }, { label: 'Estado', render: order => <Status value={order.status} /> }]} /></div></Panel>
 }
 
-function SalesCreator({ data, run, busy }) {
+function SellerSelect({ data, label, value, onChange, optional = false }) {
+  return <Field label={label}><select value={value} onChange={event => onChange(event.target.value)} required={!optional}><option value="">{optional ? 'Administrador que registra la venta' : 'Selecciona un vendedor activo'}</option>{activeSellers(data).map(member => <option value={memberUid(member)} key={memberUid(member)}>{sellerLabel(member)}</option>)}</select></Field>
+}
+function SalesCreator({ data, run, busy, role }) {
+  const isAdmin = role === 'admin'
   const [contactId, setContactId] = useState('')
+  const [sellerUid, setSellerUid] = useState('')
   const [customerName, setCustomerName] = useState(''), [notes, setNotes] = useState(''), [paid, setPaid] = useState('0')
   const [lines, setLines] = useState(() => [freshLine()])
   const products = productOptions(data, 'finished')
-  const estimate = estimateLines(lines)
+  const currentLines = isAdmin ? lines : lines.map(line => ({ ...line, amount: decimalCents(catalogPriceCents(products.find(product => product.id === line.variantId))) }))
+  const estimate = estimateLines(currentLines)
   function payload() {
-    return { ...(contactId ? { contactId } : {}), customerName: customerName.trim(), notes: notes.trim(), paidCents: cents(paid, 'Abono inicial'), lines: lines.map((line, index) => ({ variantId: line.variantId, quantity: units(line.quantity, `Cantidad ${index + 1}`), unitPriceCents: cents(line.amount, `Precio ${index + 1}`) })) }
+    return {
+      ...(isAdmin && contactId ? { contactId } : {}), ...(isAdmin && sellerUid ? { sellerUid } : {}),
+      customerName: customerName.trim(), notes: notes.trim(), paidCents: cents(paid, 'Abono inicial'),
+      lines: currentLines.map((line, index) => {
+        if (!products.some(product => product.id === line.variantId)) throw new Error(`Variante ${index + 1}: selecciona un producto terminado activo.`)
+        return { variantId: line.variantId, quantity: units(line.quantity, `Cantidad ${index + 1}`), unitPriceCents: cents(line.amount, `Precio ${index + 1}`) }
+      }),
+    }
   }
-  return <ActionForm title="Nueva venta" description="Al confirmar se descuentan las unidades, se registra el ingreso y su costo, y se crea la cuenta por cobrar." run={run} busy={busy} action="sales.create" getPayload={payload} submitLabel="Confirmar venta" onDone={() => { setContactId(''); setCustomerName(''); setNotes(''); setPaid('0'); setLines([freshLine()]) }}><ContactSelect data={data} type="customer" value={contactId} onChange={contact => { setContactId(contact?.id || ''); if (contact) setCustomerName(contact.name) }} /><Field label="Cliente" value={customerName} readOnly={Boolean(contactId)} onChange={e => setCustomerName(e.target.value)} maxLength={150} required /><LineEditor lines={lines} setLines={setLines} products={products} /><div className="erp-field-grid"><MoneyField label="Abono inicial" value={paid} onChange={e => setPaid(e.target.value)} /><Field label="Notas de la venta"><textarea value={notes} onChange={e => setNotes(e.target.value)} maxLength={1000} rows="2" /></Field></div><p className="erp-total">Total a confirmar: {formatMoney(estimate)}</p>{!products.length && <p className="erp-help">Registra primero una variante de producto terminado en Inventario.</p>}</ActionForm>
+  return <ActionForm title="Nueva venta" description={isAdmin ? 'Al confirmar se descuentan las unidades, se registra el ingreso y su costo, y se crea la cuenta por cobrar.' : 'Registra tu venta al precio del catálogo. Al confirmar se descuentan las unidades y se guarda el saldo del cliente.'} run={run} busy={busy} action="sales.create" getPayload={payload} submitLabel="Confirmar venta" onDone={() => { setContactId(''); setSellerUid(''); setCustomerName(''); setNotes(''); setPaid('0'); setLines([freshLine()]) }}>
+    {isAdmin && <ContactSelect data={data} type="customer" value={contactId} onChange={contact => { setContactId(contact?.id || ''); if (contact) setCustomerName(contact.name) }} />}
+    <Field label="Cliente" value={customerName} readOnly={isAdmin && Boolean(contactId)} onChange={e => setCustomerName(e.target.value)} maxLength={150} required />
+    {isAdmin && <SellerSelect data={data} label="Vendedor asignado" value={sellerUid} onChange={setSellerUid} optional />}
+    <LineEditor lines={lines} setLines={setLines} products={products} readOnlyPrice={!isAdmin} />
+    <div className="erp-field-grid"><MoneyField label="Abono inicial" value={paid} onChange={e => setPaid(e.target.value)} /><Field label="Notas de la venta"><textarea value={notes} onChange={e => setNotes(e.target.value)} maxLength={1000} rows="2" /></Field></div>
+    <p className="erp-total">Total a confirmar: {formatMoney(estimate)}</p>
+    {!products.length && <p className="erp-help">{isAdmin ? 'Registra primero una variante de producto terminado en Inventario.' : 'No hay variantes activas disponibles. Solicita al administrador que prepare el catálogo.'}</p>}
+  </ActionForm>
+}
+function AssignSale({ record, data, run, busy }) {
+  const sellers = activeSellers(data)
+  const [sellerUid, setSellerUid] = useState(sellers.some(member => memberUid(member) === record.sellerUid) ? record.sellerUid : '')
+  if (!sellers.length) return <p className="erp-help erp-sale-owner">Para asignar esta venta, autoriza primero una cuenta activa con rol Vendedor en Usuarios.</p>
+  return <ActionForm title="Asignar venta" description="El vendedor asignado podrá consultar esta venta y registrar sus cobros. La asignación conserva el historial y los pagos." run={run} busy={busy} action="sales.assign" getPayload={() => ({ saleId: record.id, sellerUid })} submitLabel="Guardar vendedor de la venta"><SellerSelect data={data} label={`Vendedor para la venta ${record.id}`} value={sellerUid} onChange={setSellerUid} /></ActionForm>
 }
 function VoidSale({ record, run, busy }) {
   const [reason, setReason] = useState(''), [confirmed, setConfirmed] = useState(false)
@@ -188,8 +220,25 @@ function VoidPayroll({ record, run, busy }) {
   if (record.paidCents > 0) return <p className="erp-help">Esta nómina tiene pagos registrados y no puede anularse automáticamente.</p>
   return <ActionForm title="Anular nómina sin pagos" description="Compensa el gasto y las obligaciones del periodo; conserva el historial. Solo admite nóminas sin pagos." run={run} busy={busy} action="payroll.void" submitLabel="Confirmar anulación de nómina" getPayload={() => ({ payrollId: record.id, reason: reason.trim() })}><Field label={`Motivo de anulación de nómina ${record.id}`} value={reason} onChange={e => setReason(e.target.value)} required minLength={3} maxLength={500} /></ActionForm>
 }
-export function SalesPanel({ data, run, busy }) {
-  return <Panel title="Ventas y cartera" description="Cada venta conecta las prendas entregadas, su costo y el dinero recibido."><StatCards values={[["Ventas vigentes", count.format((data.sales || []).filter(item => item.status !== 'void').length)], ['Saldo de clientes', formatMoney(outstanding(data.sales))]]} /><SalesCreator data={data} run={run} busy={busy} /><ContactsDirectory data={data} run={run} busy={busy} type="customer" /><Records title="Ventas registradas" rows={data.sales || []} columns={[{ label: 'Cliente / fecha', render: row => <>{row.customerName}<small>{dateText(row.createdAt)}</small>{row.hasUnvaluedCost && row.status !== 'void' && <small className="erp-cost-warning">Costo histórico incompleto</small>}</> }, { label: 'Total', render: row => formatMoney(row.totalCents) }, { label: 'Pagado', render: row => formatMoney(row.paidCents) }, { label: 'Estado', render: row => <Status value={row.status} /> }]} renderDetails={row => <details className="erp-details"><summary>Venta {row.id}</summary><LinesDetail record={row} data={data} />{row.notes && <p>{row.notes}</p>}<PaymentForm run={run} busy={busy} type="sales" record={row} /><VoidSale record={row} run={run} busy={busy} /></details>} /></Panel>
+export function SalesPanel({ data, run, busy, role = 'admin' }) {
+  const isAdmin = role === 'admin'
+  if (!isAdmin && role !== 'seller') return <Panel title="Ventas" description="Este módulo requiere permisos de administrador o vendedor." />
+  const sales = data.sales || []
+  function ownerLabel(row) {
+    const uid = row.sellerUid || row.createdBy
+    const member = (data.members || []).find(item => memberUid(item) === uid)
+    return member?.name || member?.email || uid || 'Sin asignación'
+  }
+  return <Panel title={isAdmin ? 'Ventas y cartera' : 'Mis ventas y cobros'} description={isAdmin ? 'Cada venta conecta las prendas entregadas, su costo y el dinero recibido.' : 'Consulta tus ventas, registra las nuevas y cobra sus saldos. Los precios corresponden al catálogo vigente.'}>
+    <StatCards values={[[isAdmin ? 'Ventas vigentes' : 'Mis ventas vigentes', count.format(sales.filter(item => item.status !== 'void').length)], [isAdmin ? 'Saldo de clientes' : 'Saldo de mis clientes', formatMoney(outstanding(sales))]]} />
+    <SalesCreator key={role} data={data} run={run} busy={busy} role={role} />
+    {isAdmin && <ContactsDirectory data={data} run={run} busy={busy} type="customer" />}
+    <Records title={isAdmin ? 'Ventas registradas' : 'Mis ventas registradas'} rows={sales} columns={[
+      { label: 'Cliente / fecha', render: row => <>{row.customerName}<small>{dateText(row.createdAt)}</small>{isAdmin && row.hasUnvaluedCost && row.status !== 'void' && <small className="erp-cost-warning">Costo histórico incompleto</small>}</> },
+      ...(isAdmin ? [{ label: 'Responsable', render: row => <span className="erp-identifier">{ownerLabel(row)}</span> }] : []),
+      { label: 'Total', render: row => formatMoney(row.totalCents) }, { label: 'Pagado', render: row => formatMoney(row.paidCents) }, { label: 'Estado', render: row => <Status value={row.status} /> },
+    ]} renderDetails={row => <details className="erp-details"><summary>Venta {row.id}</summary><LinesDetail record={row} data={data} />{row.notes && <p>{row.notes}</p>}<PaymentForm run={run} busy={busy} type="sales" record={row} />{isAdmin && <><AssignSale key={`${row.id}-${row.sellerUid || row.createdBy}`} record={row} data={data} run={run} busy={busy} /><VoidSale record={row} run={run} busy={busy} /></>}</details>} />
+  </Panel>
 }
 
 function PurchasesCreator({ data, run, busy }) {
@@ -259,11 +308,11 @@ export function PeoplePanel({ data, run, busy }) {
 }
 
 function MemberForm({ record, run, busy }) {
-  const [uid, setUid] = useState(record?.id || record?.uid || ''), [role, setRole] = useState(record?.role || 'operator'), [active, setActive] = useState(record?.active !== false)
-  return <ActionForm title={record ? 'Actualizar acceso' : 'Autorizar cuenta'} description={record ? undefined : 'La persona debe crear su cuenta o existir en Firebase Authentication. Copia el UID que aparece en su pantalla de acceso pendiente.'} run={run} busy={busy} action="members.save" submitLabel={record ? 'Guardar permisos' : 'Autorizar usuario'} getPayload={() => ({ uid: uid.trim(), role, active })} onDone={() => { if (!record) setUid('') }}><Field label={record ? `UID del miembro ${record.id}` : 'UID del usuario a autorizar'} value={uid} onChange={e => setUid(e.target.value)} required readOnly={Boolean(record)} maxLength={128} /><Field label={record ? `Rol de ${record.id}` : 'Rol del usuario'}><select value={role} onChange={e => setRole(e.target.value)}><option value="admin">Administrador</option><option value="operator">Operador</option><option value="viewer">Consulta</option></select></Field><label className="erp-check"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />Acceso activo</label></ActionForm>
+  const [uid, setUid] = useState(record?.id || record?.uid || ''), [role, setRole] = useState(record?.role || 'viewer'), [active, setActive] = useState(record?.active !== false)
+  return <ActionForm title={record ? 'Actualizar acceso' : 'Autorizar cuenta'} description={record ? undefined : 'La persona debe crear su cuenta o existir en Firebase Authentication. Copia el UID que aparece en su pantalla de acceso pendiente.'} run={run} busy={busy} action="members.save" submitLabel={record ? 'Guardar permisos' : 'Autorizar usuario'} getPayload={() => ({ uid: uid.trim(), role, active })} onDone={() => { if (!record) setUid('') }}><Field label={record ? `UID del miembro ${record.id}` : 'UID del usuario a autorizar'} value={uid} onChange={e => setUid(e.target.value)} required readOnly={Boolean(record)} maxLength={128} /><Field label={record ? `Rol de ${record.id}` : 'Rol del usuario'}><select value={role} onChange={e => setRole(e.target.value)}><option value="admin">Administrador</option><option value="operator">Operador</option><option value="seller">Vendedor</option><option value="viewer">Usuario</option></select></Field><label className="erp-check"><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />Acceso activo</label></ActionForm>
 }
 export function MembersPanel({ data, run, busy }) {
-  return <Panel title="Usuarios y permisos" description="El administrador autoriza y revoca el acceso de las cuentas de la empresa."><div className="erp-permissions"><p><strong>Administrador:</strong> administra catálogo, stock, ventas, compras, producción, finanzas, personal, usuarios y auditoría.</p><p><strong>Operador:</strong> gestiona catálogo y entradas de inventario; consulta movimientos. No recibe costos ni datos financieros y no muestra el valor agregado del inventario.</p><p><strong>Consulta:</strong> conserva la consulta de prendas, precios de venta, existencias y QR. No puede modificar registros.</p></div><MemberForm run={run} busy={busy} /><Records title="Cuentas autorizadas" rows={data.members || []} columns={[{ label: 'Cuenta / UID', render: member => <>{member.name || member.email || 'Cuenta de la empresa'}<small className="erp-identifier">{member.id || member.uid}</small></> }, { label: 'Rol', render: member => states[member.role] || member.role }, { label: 'Acceso', render: member => member.active === true ? 'Activo' : 'Revocado' }]} renderDetails={member => <details className="erp-details"><summary>Permisos de {member.id || member.uid}</summary><MemberForm key={`${member.id}-${member.role}-${member.active}`} record={member} run={run} busy={busy} /></details>} /><p className="erp-help">Para evitar perder el control de la empresa, un administrador no puede revocar ni degradar su propia sesión. Contraseñas y recuperación de cuenta se administran con Firebase Authentication.</p></Panel>
+  return <Panel title="Usuarios y permisos" description="El administrador autoriza y revoca el acceso de las cuentas de la empresa."><div className="erp-permissions"><p><strong>Administrador:</strong> crea y modifica referencias y variantes; administra stock, costos, archivo y eliminación de productos, ventas, compras, producción, finanzas, personal, usuarios y auditoría.</p><p><strong>Operador:</strong> agrega stock a variantes existentes y activas, de forma manual o por QR, y consulta sus propios movimientos. No crea ni modifica productos, tallas, colores o precios y no accede a costos ni al valor del inventario.</p><p><strong>Vendedor:</strong> consulta prendas y precios de catálogo, registra sus ventas y los cobros de sus ventas asignadas. No cambia precios, anula ventas ni modifica el catálogo o el stock manualmente; no accede a costos, finanzas o al valor del inventario.</p><p><strong>Usuario:</strong> consulta prendas, precios de venta, existencias y QR. No modifica registros ni ve el valor del inventario.</p></div><MemberForm run={run} busy={busy} /><Records title="Cuentas autorizadas" rows={data.members || []} columns={[{ label: 'Cuenta / UID', render: member => <>{member.name || member.email || 'Cuenta de la empresa'}<small className="erp-identifier">{member.id || member.uid}</small></> }, { label: 'Rol', render: member => states[member.role] || member.role }, { label: 'Acceso', render: member => member.active === true ? 'Activo' : 'Revocado' }]} renderDetails={member => <details className="erp-details"><summary>Permisos de {member.id || member.uid}</summary><MemberForm key={`${member.id}-${member.role}-${member.active}`} record={member} run={run} busy={busy} /></details>} /><p className="erp-help">Para evitar perder el control de la empresa, un administrador no puede revocar ni degradar su propia sesión. Contraseñas y recuperación de cuenta se administran con Firebase Authentication.</p></Panel>
 }
 
 export function AuditPanel({ data }) {

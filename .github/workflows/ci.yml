@@ -36,5 +36,7 @@ jobs:
         if: always()
         with:
           name: browser-reports
-          path: .verification/*report.json
+          path: |
+            .verification/*report.json
+            .verification/*.png
           if-no-files-found: ignore

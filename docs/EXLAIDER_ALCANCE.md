@@ -13,7 +13,7 @@ Esta versión amplía el inventario a gestión interna integrada de compras, ven
 | Trabajar desde PC y celular | PWA, Hosting HTTPS y Firestore en tiempo real | Comparte código web; requiere conexión para confirmar operaciones. |
 | Preparar etiquetas | QR antes de guardar, con revisión al escanear | Generar una imagen no registra productos ni entradas. |
 | Controlar inventario | Recepciones, ajustes con motivo, mínimos y movimientos | Una compra ya ingresa sus unidades; no duplicar su recepción. |
-| Separar permisos | Administrador, operador y viewer activos | Los costos y módulos privados se autorizan en servidor. |
+| Separar permisos | Administrador, operador, vendedor y usuario activos | Los costos y módulos privados se autorizan en servidor. |
 | Vender y controlar cartera | Ventas, salida de stock, abonos, saldo y anulación | Registra pagos, sin ejecutar cobros externos. |
 | Comprar | Proveedor, entrada, costo, pagos y devolución/anulación | Valida stock suficiente al revertir. |
 | Seguir producción | Recetas, órdenes, consumo, terminación y cancelación | Materiales en unidad/cm/g; costo hacia proceso y terminado. |
@@ -24,22 +24,11 @@ Esta versión amplía el inventario a gestión interna integrada de compras, ven
 
 ## Permisos
 
-| Función | Administrador | Operador | Viewer |
-| --- | --- | --- | --- |
-| Consultar productos terminados, precio y stock | Sí | Sí | Sí |
-| Consultar materias primas | Sí | Sí | No |
-| Crear/editar variantes y recibir unidades | Sí | Sí | No |
-| Corregir nombre/descripción del encabezado común | Sí | Sí | No |
-| Ajustar stock, valorar, archivar/reactivar y migrar | Sí | No | No |
-| Consultar movimientos sin costos | Sí | Sí | No |
-| Tarjeta agregada de valor de venta | Sí | No | Sí, de su catálogo |
-| Costos de adquisición y módulos privados | Sí | No | No |
-| Aprobar/cambiar/suspender miembros | Sí | No | No |
-| Consultar auditoría administrativa | Sí | No | No |
+La [matriz de permisos](PERMISOS_Y_CATALOGO.md) define cuatro roles. Administrador controla catálogo, variantes, archivo, papelera y todos los módulos. Operador únicamente ingresa stock de variantes existentes y consulta sus movimientos. Vendedor registra ventas y cobros propios a precios de catálogo. Usuario sólo consulta prendas. La valoración total y los costos son exclusivos del administrador.
 
-El administrador controla todos los módulos de negocio con validaciones de consistencia: no hay stock negativo, no se archivan existencias positivas ni se borra la historia. Otro administrador debe retirar su rol/acceso para evitar un bloqueo accidental.
+El archivo conserva existencias y permite reactivación. Eliminar con existencias registra su baja y costo, con confirmación y motivo; no borra documentos históricos ni libera SKU. Recuperar devuelve la ficha sin reponer stock. Otro administrador debe retirar el rol o acceso de una cuenta administradora para evitar el bloqueo accidental desde la propia sesión.
 
-El operador mantiene precio unitario y stock. Aunque no aparece la tarjeta total, esos datos permiten calcular su valor de venta. Los costos de adquisición e importes privados sí están en documentos que el operador no puede leer.
+El catálogo conserva precio unitario y stock. Esos datos permiten calcular un valor de venta; ocultar el resumen no hace secreta esa operación. Los costos de adquisición y módulos privados se protegen por separado.
 
 ## Operación textil
 
@@ -54,7 +43,7 @@ Las recetas usan unidades base explícitas. Iniciar una orden consume materiales
 1. Respaldar el proyecto y conservar `.env.local`, cuentas de Authentication y membresías. Preparar backend, reglas e interfaz conjuntamente; la versión nueva no funciona como un reemplazo de HTML aislado.
 2. Probar en emuladores y con un grupo controlado. Publicar Functions requiere Blaze; esta preparación no activa el plan.
 3. Migrar explícitamente productos anteriores en lotes de hasta 20, reasignando referencias con nombres diferentes. Los documentos antiguos permanecen en solo lectura y los IDs se conservan para las etiquetas existentes.
-4. Registrar los costos pendientes, conciliar cantidades físicamente y comprobar los tres roles.
+4. Registrar los costos pendientes, conciliar cantidades físicamente y comprobar los cuatro roles.
 5. Ensayar compra, venta con abono, anulación, producción y nómina con documentos de prueba identificables. Capacitar al equipo antes de basar decisiones en los saldos.
 
 Los movimientos nuevos no reconstruyen ventas, pagos ni producción anteriores ausentes. La precisión depende de cargar el inventario inicial y registrar operaciones completas. El plan de adopción del documento empresarial sigue siendo una propuesta; el código no afirma que ya se haya ejecutado.

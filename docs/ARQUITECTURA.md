@@ -32,12 +32,14 @@ src/
     ProductForm.jsx               Producto individual y QR antes de guardar
     ProductQr.jsx / QrScanner.jsx  Generación y lectura QR
     OperationsPanels.jsx          Ventas, compras, producción, finanzas y personal
+    catalog/                      Detalle agrupado y controles de ciclo de vida
   hooks/
     useAuth.js                    Sesión y membresía en tiempo real
     useOrgData.js                 Suscripciones limitadas por rol
   lib/
     firebase.js / erpApi.js        Conexión, callable y reintento del comando
     productModel.js / qr.js        Validación de formulario y contrato QR
+    catalogView.js                Agrupación y selección de variantes existentes
 functions/
   index.js                        Callable erp y comprobación de UID para permisos
   lib/core.js                     Autorización, idempotencia, dinero y asientos
@@ -56,23 +58,24 @@ Todos los documentos están bajo `organizations/{companyId}`. La empresa provien
 | Colección | Contenido | Lectura |
 | --- | --- | --- |
 | `members` | UID, rol y estado activo | Usuario: su documento; administrador: el equipo. |
-| `references` | Nombre canónico, referencia, categoría, descripción, tipo y unidad | Administrador y operador; viewer solo productos terminados. |
-| `variants` | SKU, alias anteriores, talla, color, lote, precio de venta y stock | Administrador y operador; viewer solo productos terminados. |
+| `references` | Nombre canónico, referencia, categoría, descripción, tipo y unidad | Administrador y operador; vendedor/usuario sólo productos terminados. |
+| `variants` | SKU, alias anteriores, talla, color, lote, precio de venta y stock | Administrador y operador; vendedor/usuario sólo productos terminados. |
 | `costs` | Valor de adquisición de existencias y unidades sin valorar | Administrador. |
-| `movements` | Cantidades, origen, motivo y responsable; sin costos | Administrador y operador. |
+| `movements` | Cantidades, origen, motivo y responsable; sin costos | Administrador: todos; operador: sólo `createdBy == UID`. |
 | `sales`, `purchases`, `payments` | Documentos comerciales y pagos registrados | Administrador. |
+| `salesDesk` | Proyección de ventas sin costos ni margen | Administrador; vendedor: sólo `sellerUid == UID`. |
 | `productionBoms`, `productionOrders` | Recetas, consumos y órdenes | Administrador. |
 | `employees`, `attendance`, `payroll` | Personal, asistencia y nómina interna | Administrador. |
 | `contacts` | Clientes y proveedores | Administrador. |
 | `journals`, `financeEntries` | Asientos y caja registrada | Administrador. |
-| `audit`, `commands`, `migrations` | Auditoría, idempotencia y control de migración | Administrador. |
+| `audit`, `commands`, `migrations`, `deletions` | Auditoría, idempotencia, migración y detalle de bajas | Administrador. |
 | `variantSkuIndex`, `variantCombinationIndex` | Unicidad de SKU y combinación | Solo backend. |
 | `employeeDocumentIndex`, `payrollPeriodIndex` | Unicidad de documento y período de nómina | Solo backend. |
 | `products`, `skuIndex` | Datos anteriores conservados para migración | Productos: miembros activos; índice: backend. Sin escrituras cliente. |
 
 ### Referencia y variantes
 
-`JN-101` y `jn-101` reservan el mismo encabezado `r_jn-101`. Crear otra variante exige el mismo nombre normalizado. El encabezado es la fuente única de nombre, categoría, descripción e imagen. Administrador y operador pueden corregir esos datos comunes; la referencia, el tipo y la unidad permanecen definidos para todas sus variantes.
+`JN-101` y `jn-101` reservan el mismo encabezado `r_jn-101`. Crear otra variante exige el mismo nombre normalizado. El encabezado es la fuente única de nombre, categoría, descripción e imagen. Sólo el administrador crea o corrige catálogo; la referencia, el tipo y la unidad permanecen definidos para todas sus variantes.
 
 Cada combinación normalizada de referencia/talla/color/lote es única, aunque se intente registrar con otro SKU. Los SKU anteriores de una variante permanecen reservados a ella: cambiar el código no permite que una etiqueta antigua identifique otro producto. `skuAliases` conserva hasta 50 códigos anteriores normalizados.
 
@@ -147,9 +150,9 @@ Los pagos son registros internos: no hacen transferencias ni cobros externos. La
 
 ## Lecturas, QR y límites
 
-`useOrgData` escucha solo las colecciones permitidas. Al cambiar UID/rol descarta el estado anterior y cancela las escuchas. El viewer consulta `kind == finished`, conforme a las reglas.
+`useOrgData` escucha solo las colecciones permitidas. Al cambiar UID/rol descarta el estado anterior y cancela las escuchas. Vendedor y usuario consultan `kind == finished`, conforme a las reglas. El vendedor sólo escucha `salesDesk` filtrado por su UID, y el operador sólo movimientos de su autoría.
 
-El operador conserva precio unitario de venta y stock, pero no consulta costos/finanzas ni ve la tarjeta agregada de valor. Puede calcular por su cuenta un valor de venta con los datos unitarios visibles; ocultar la tarjeta no vuelve secreta esa operación matemática. El viewer mantiene su consulta y valor de venta del catálogo, sin costos privados.
+El operador conserva precio unitario de venta y stock, pero no consulta costos/finanzas ni ve la tarjeta agregada de valor. Puede calcular por su cuenta un valor de venta con los datos unitarios visibles; ocultar la tarjeta no vuelve secreta esa operación matemática. El usuario conserva la consulta del catálogo, sin valoración total ni costos privados. El vendedor registra únicamente sus ventas y pagos a precio de catálogo. La matriz y el ciclo de vida se detallan en [PERMISOS_Y_CATALOGO.md](PERMISOS_Y_CATALOGO.md).
 
 Los QR identifican por ID/SKU o prellenan campos permitidos, incluidos tipo y unidad. Los QR anteriores siguen siendo compatibles; por defecto representan producto terminado/unidad. No incluyen costos privados, no conceden permisos ni cambian de empresa. Prepararlos no guarda documentos y una etiqueta antigua no sustituye el stock vigente. Véase [FIREBASE_Y_QR.md](FIREBASE_Y_QR.md).
 

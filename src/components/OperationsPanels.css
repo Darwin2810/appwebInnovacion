@@ -63,3 +63,4 @@
 .erp-directory { padding: 20px; background: #fff; border: 1px solid var(--border); border-radius: 14px; min-width: 0; }
 .erp-directory > summary { cursor: pointer; color: var(--green); font-size: 16px; font-weight: 650; }
 .erp-directory[open] > .erp-form, .erp-directory[open] > .erp-records { margin-top: 20px; }
+.erp-sale-owner { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: #f6f8f6; }

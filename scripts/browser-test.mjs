@@ -16,10 +16,11 @@ const setupSmoke = process.argv.includes('--setup-smoke')
 const password = 'BrowserEmulator2026!'
 const run = String(Date.now())
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
-const report = { environment: setupSmoke ? 'Unconfigured production setup and PWA only; no cloud integration exercised' : 'Firebase Auth, Firestore and Functions emulators; isolated admin, operator and viewer Chromium clients', appUrl, project, checks: [], consoleErrors: [], pageExceptions: [] }
+const report = { environment: setupSmoke ? 'Unconfigured production setup and PWA only; no cloud integration exercised' : 'Firebase Auth, Firestore and Functions emulators; isolated admin, operator, seller and viewer Chromium clients', appUrl, project, checks: [], consoleErrors: [], pageExceptions: [] }
 const accountsToRemove = []
 const contexts = []
 const sessions = new Map()
+const referencesBySku = new Map()
 const calls = new Map()
 await mkdir(directory, { recursive: true })
 
@@ -56,6 +57,8 @@ function field(document, name) {
   if ('integerValue' in value) return Number(value.integerValue)
   if ('doubleValue' in value) return value.doubleValue
   if ('booleanValue' in value) return value.booleanValue
+  if ('arrayValue' in value) return (value.arrayValue.values || []).map(item => field({ fields: { item } }, 'item'))
+  if ('mapValue' in value) return Object.fromEntries(Object.keys(value.mapValue.fields || {}).map(key => [key, field({ fields: value.mapValue.fields }, key)]))
   return value.stringValue
 }
 async function variantBySku(sku) {
@@ -80,7 +83,7 @@ const request = (method, params = {}, sessionId) => new Promise((resolve, reject
 })
 const helpers = `
   window.qaControl = label => [...document.querySelectorAll('input,select,textarea')].find(el => el.getAttribute('aria-label') === label || [...(el.labels || [])].some(l => l.textContent.trim().replace(/\\s*\\*$/, '') === label || l.querySelector(':scope > span')?.textContent.trim() === label));
-  window.qaButton = text => [...document.querySelectorAll('button')].find(el => el.getClientRects().length && (el.getAttribute('aria-label') === text || el.textContent.replace(/\\s+/g, ' ').trim() === text));
+  window.qaButton = text => [...(document.querySelector('[role="dialog"]') || document).querySelectorAll('button')].find(el => el.getClientRects().length && (el.getAttribute('aria-label') === text || el.textContent.replace(/\\s+/g, ' ').trim() === text));
   window.qaSet = (label,value) => {const el=qaControl(label);if(!el)throw new Error('Missing control '+label);const prototype=el.tagName==='SELECT'?HTMLSelectElement.prototype:el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value').set.call(el,value);el.dispatchEvent(new Event(el.tagName==='SELECT'?'change':'input',{bubbles:true}));};
   window.qaClick = text => {const el=qaButton(text);if(!el)throw new Error('Missing button '+text);if(el.disabled)throw new Error('Disabled button '+text);el.click();};
   window.qaStock = name => {const row=qaButton('Ver QR de '+name)?.closest('tr');const text=row?.querySelector('.stock-badge')?.textContent;if(!text)return null;return Number(text.trim().match(/^[0-9.]+/)?.[0].replaceAll('.',''));};
@@ -133,12 +136,31 @@ class Client {
     await this.set('Correo electrónico', account.email)
     await this.set('Contraseña', password)
     await this.submit()
-    await this.wait(`!qaControl('Contraseña') && document.body.textContent.includes('Rol: ${account.role}')`, 'approved company membership')
+    await this.wait(`!qaControl('Contraseña') && document.querySelector('[data-role="${account.role}"]')`, 'approved company membership')
     await this.wait(`document.querySelector('[aria-label="Resumen del inventario"]') && document.querySelector('.sync-status')?.textContent.includes('Conectado')`, 'live role-scoped inventory rendered')
-    if (account.role !== 'viewer') await this.wait(`qaButton('Añadir producto') && !qaButton('Añadir producto').disabled && qaButton('Escanear QR') && !qaButton('Escanear QR').disabled`, 'active catalog and callable actions')
+    if (account.role === 'admin') await this.wait(`qaButton('Añadir producto') && !qaButton('Añadir producto').disabled`, 'admin catalog actions ready')
+    if (['admin', 'operator'].includes(account.role)) await this.wait(`qaButton('Escanear QR') && !qaButton('Escanear QR').disabled`, 'authorized scanner ready')
   }
   async stock(name, expected) { await this.wait(`qaStock(${JSON.stringify(name)}) === ${expected}`, `${name} stock = ${expected}`) }
-  async stockSku(sku, expected) { await this.wait(`qaStockSku(${JSON.stringify(sku)}) === ${expected}`, `${sku} stock = ${expected}`) }
+  async grid() {
+    if (!await this.evaluate(`!!document.querySelector('[aria-label="Resumen del inventario"]')`)) await this.click('Inventario')
+    if (await this.evaluate(`!!qaButton('Volver a productos')`)) await this.click('Volver a productos')
+    await this.wait(`document.querySelector('[aria-label="Resumen del inventario"]') && !qaButton('Volver a productos')`, 'grouped inventory grid')
+  }
+  async openReference(reference) {
+    await this.grid()
+    await this.wait(`qaButton(${JSON.stringify(`Ver variantes de ${reference}`)})`, `reference ${reference} appears live`)
+    await this.click(`Ver variantes de ${reference}`)
+    await this.wait(`qaButton('Volver a productos') && document.querySelector('tr[data-sku]')`, `reference ${reference} detail`)
+  }
+  async stockSku(sku, expected) {
+    if (!await this.evaluate(`!!qaRow(${JSON.stringify(sku)})`)) {
+      const reference = referencesBySku.get(sku)
+      assert.ok(reference, `Missing browser fixture reference for ${sku}`)
+      await this.openReference(reference)
+    }
+    await this.wait(`qaStockSku(${JSON.stringify(sku)}) === ${expected}`, `${sku} stock = ${expected}`)
+  }
   async rowClick(sku, label) { await this.evaluate(`qaRowClick(${JSON.stringify(sku)},${JSON.stringify(label)})`); await pause(60) }
   async variantFields(index, values) { for (const [name, value] of Object.entries(values)) { await this.evaluate(`qaVariantSet(${index},${JSON.stringify(name)},${JSON.stringify(String(value))})`); await pause(30) } }
   async closed() { await this.wait(`!document.querySelector('[role="dialog"]')`, 'completed operation closes dialog') }
@@ -182,11 +204,13 @@ async function fill(page, product) {
 let desktop
 let mobile
 let viewerPage
+let sellerPage
 try {
   const executable = await chromeExecutable()
   const admin = setupSmoke ? null : await createAccount('admin')
   const operator = setupSmoke ? null : await createAccount('operator')
   const viewer = setupSmoke ? null : await createAccount('viewer')
+  const seller = setupSmoke ? null : await createAccount('seller')
   profile = await mkdtemp(path.join(tmpdir(), 'exlaider-browser-'))
   browser = spawn(executable, ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] })
   let log = ''
@@ -253,72 +277,88 @@ try {
     await check('Setup and offline reload produce no JavaScript exceptions or console errors', async () => { assert.deepEqual(report.pageExceptions, []); assert.deepEqual(report.consoleErrors, []) })
   } else {
   viewerPage = await client('viewer mobile', true)
-  await check('Admin, operator and viewer sign in using isolated browser contexts', async () => {
-    await desktop.login(admin)
-    await mobile.login(operator)
-    await viewerPage.login(viewer)
+  sellerPage = await client('seller mobile', true)
+  const inventoryClients = [desktop, mobile, sellerPage, viewerPage]
+  await check('Admin, operator, seller and viewer sign in using four isolated browser contexts', async () => {
+    for (const [page, account] of [[desktop, admin], [mobile, operator], [sellerPage, seller], [viewerPage, viewer]]) await page.login(account)
   })
-  await check('Operator has stock tools without aggregate inventory values; viewer stays read-only', async () => {
-    assert.equal(await mobile.evaluate(`!!qaButton('Añadir producto') && !!qaButton('Escanear QR')`), true)
-    assert.equal(await mobile.evaluate(`[...document.querySelectorAll('.stat-label')].some(el=>/valor|costo/i.test(el.textContent))`), false)
-    assert.equal(await mobile.evaluate(`['Resumen','Ventas','Compras','Producción','Finanzas','Personal','Usuarios','Auditoría'].some(label=>!!qaButton(label))`), false)
-    assert.equal(await viewerPage.evaluate(`!!qaButton('Añadir producto') || !!qaButton('Escanear QR')`), false)
-    assert.equal(await viewerPage.evaluate(`[...document.querySelectorAll('.stat-label')].some(el=>/valor/i.test(el.textContent))`), true)
+  await check('Role navigation enforces intake-only operators, sales-only sellers and read-only viewers without valuation', async () => {
+    assert.equal(await desktop.evaluate(`!!qaButton('Añadir producto') && !!qaButton('Varias tallas y colores') && !!qaButton('Usuarios')`), true)
+    assert.equal(await mobile.evaluate(`!!qaButton('Escanear QR') && !!qaButton('Movimientos') && !qaButton('Añadir producto') && !qaButton('Varias tallas y colores')`), true)
+    assert.equal(await sellerPage.evaluate(`!!qaButton('Ventas') && !qaButton('Movimientos') && !qaButton('Escanear QR') && !qaButton('Añadir producto')`), true)
+    assert.equal(await viewerPage.evaluate(`!!qaButton('Añadir producto') || !!qaButton('Escanear QR') || !!qaButton('Ventas') || !!qaButton('Movimientos')`), false)
+    for (const page of [mobile, sellerPage, viewerPage]) {
+      assert.equal(await page.evaluate(`[...document.querySelectorAll('.stat-label')].some(el=>/valor|costo/i.test(el.textContent))`), false, page.name)
+      assert.equal(await page.evaluate(`['Resumen','Compras','Producción','Finanzas','Personal','Usuarios','Auditoría'].some(label=>!!qaButton(label))`), false, page.name)
+    }
+    assert.equal(await mobile.evaluate(`!!qaButton('Ventas')`), false)
   })
   const product = { name: `Jean QR ${run}`, sku: `QA-QR-${run}`, reference: `QR-${run}`, category: 'Jeans', size: '34', color: 'Negro', lot: 'QR-2026', stock: 3, minStock: 1, price: 125000, description: 'Prenda preparada antes de registrarla.' }
+  referencesBySku.set(product.sku, product.reference)
   const qrFile = path.join(directory, 'draft-product-qr.png')
-  await mobile.click('Añadir producto')
-  await check('Empty product name blocks submission through native form validation', async () => {
-    await mobile.submit()
-    assert.equal(await mobile.evaluate(`qaControl('Nombre del producto').validity.valueMissing`), true)
-    assert.equal(await mobile.evaluate(`!!document.querySelector('[role="dialog"]')`), true)
+  await desktop.click('Añadir producto')
+  await check('An admin product form blocks an empty required name without writing a record', async () => {
+    await desktop.submit()
+    assert.equal(await desktop.evaluate(`qaControl('Nombre del producto').validity.valueMissing`), true)
+    assert.equal(await desktop.evaluate(`!!document.querySelector('[role="dialog"]')`), true)
     assert.equal(await variantBySku(product.sku), null)
   })
-  await check('A draft QR includes every entered field and never saves inventory', async () => {
-    await fill(mobile, product)
-    await mobile.set('Descripción', product.description)
-    await mobile.click('Generar QR sin guardar')
-    await mobile.wait(`document.querySelector('[aria-label="QR de producto sin registrar"] .qr-image')?.src.startsWith('data:image/png;base64,')`, 'real draft QR raster image')
-    const content = await mobile.evaluate(`JSON.parse(document.querySelector('[aria-label="QR de producto sin registrar"] .qr-code pre').textContent)`)
+  await check('Only an admin prepares a full product QR before saving and the PNG contains every entered field', async () => {
+    await fill(desktop, product)
+    await desktop.set('Descripción', product.description)
+    await desktop.click('Generar QR sin guardar')
+    await desktop.wait(`document.querySelector('[aria-label="QR de producto sin registrar"] .qr-image')?.src.startsWith('data:image/png;base64,')`, 'real draft QR raster image')
+    const content = await desktop.evaluate(`JSON.parse(document.querySelector('[aria-label="QR de producto sin registrar"] .qr-code pre').textContent)`)
     for (const [key, value] of Object.entries(product)) assert.equal(content[key], value, `QR field ${key}`)
     assert.equal(content.type, 'inventory-product')
     assert.equal(content.currency, 'COP')
     assert.equal('id' in content, false)
-    const source = await mobile.evaluate(`document.querySelector('[aria-label="QR de producto sin registrar"] .qr-image').src`)
+    const source = await desktop.evaluate(`document.querySelector('[aria-label="QR de producto sin registrar"] .qr-image').src`)
     await writeFile(qrFile, Buffer.from(source.split(',')[1], 'base64'))
     assert.equal(await variantBySku(product.sku), null)
-    assert.equal(await desktop.evaluate(`!!qaRow(${JSON.stringify(product.sku)})`), false)
-    await mobile.screenshot('draft-qr-mobile.png')
-    await mobile.click('Cancelar')
+    await desktop.screenshot('draft-qr-admin.png')
+    await desktop.click('Cancelar')
+    await desktop.closed()
+  })
+  await check('An operator decodes an unknown QR but cannot create its reference or variant', async () => {
+    await mobile.openScanner(true)
+    await mobile.uploadQr(qrFile)
+    await mobile.wait(`document.querySelector('[role="dialog"] [role="alert"]')?.textContent.match(/administrador/i)`, 'unknown QR requires an administrator')
+    assert.equal(await mobile.evaluate(`!!qaControl('Nombre del producto') || !!qaButton('Guardar producto')`), false)
+    assert.equal(await variantBySku(product.sku), null)
+    await mobile.click('Cerrar')
     await mobile.closed()
   })
-  await check('The actual QR image decoder fills the desktop form without registering the draft', async () => {
+  await check('The real PNG QR decoder fills the admin form without registering the draft', async () => {
     await desktop.openScanner(false)
     await desktop.uploadQr(qrFile)
     await desktop.wait(`qaControl('Nombre del producto')?.value === ${JSON.stringify(product.name)}`, 'decoded draft QR form')
     for (const [label, key] of [['Código (SKU)', 'sku'], ['Referencia', 'reference'], ['Talla', 'size'], ['Color', 'color'], ['Lote', 'lot'], ['Stock', 'stock'], ['Precio unitario (COP)', 'price'], ['Descripción', 'description']]) assert.equal(await desktop.evaluate(`qaControl(${JSON.stringify(label)}).value`), String(product[key]))
     assert.equal(await variantBySku(product.sku), null)
-    assert.equal(await mobile.evaluate(`!!qaRow(${JSON.stringify(product.sku)})`), false)
   })
-  await check('Saving the reviewed draft through Functions updates mobile and viewer without reloading', async () => {
+  await check('Saving the reviewed QR creates one grouped reference and updates all roles without reloads', async () => {
     await desktop.submit()
     await desktop.closed()
-    await desktop.stockSku(product.sku, 3)
-    await mobile.stockSku(product.sku, 3)
-    await viewerPage.stockSku(product.sku, 3)
+    for (const page of inventoryClients) {
+      await page.grid()
+      await page.wait(`qaButton(${JSON.stringify(`Ver variantes de ${product.reference}`)})`, 'new product group appears live')
+      assert.equal(await page.evaluate(`!!qaRow(${JSON.stringify(product.sku)})`), false, 'Variants stay inside product details')
+      await page.stockSku(product.sku, 3)
+    }
+    assert.equal(await mobile.evaluate(`['Editar variante','Ajustar stock','Valorar existencias','Eliminar','Archivar','Añadir talla / color','Editar referencia'].some(label=>!!qaButton(label))`), false)
+    for (const page of [sellerPage, viewerPage]) assert.equal(await page.evaluate(`!!qaButton('Ingresar stock') || !!qaButton('Añadir talla / color')`), false)
+    assert.equal(await mobile.evaluate(`!!document.querySelector('.catalog-detail-price') || [...document.querySelectorAll('th')].some(el=>/precio|costo/i.test(el.textContent))`), false)
   })
-  await check('Existing QR direct ingress adds exactly one unit to all connected clients', async () => {
+  await check('An operator direct QR receipt adds exactly one unit on all four connected clients', async () => {
     await mobile.openScanner(true)
     await mobile.uploadQr(qrFile)
     await mobile.closed()
-    await mobile.stockSku(product.sku, 4)
-    await desktop.stockSku(product.sku, 4)
-    await viewerPage.stockSku(product.sku, 4)
+    for (const page of inventoryClients) await page.stockSku(product.sku, 4)
   })
-  await check('Reviewed ingress rejects zero and fractional units, then adds a valid quantity live', async () => {
+  await check('Reviewed stock intake rejects zero and fractional units before accepting a positive whole quantity', async () => {
     await mobile.openScanner(false)
     await mobile.uploadQr(qrFile)
-    await mobile.wait(`qaControl('Cantidad de ingreso')`, 'existing QR ingress form')
+    await mobile.wait(`qaControl('Cantidad de ingreso')`, 'existing QR intake form')
     for (const quantity of [0, 1.5]) {
       await mobile.set('Cantidad de ingreso', quantity)
       await mobile.submit()
@@ -328,15 +368,15 @@ try {
     await mobile.set('Cantidad de ingreso', 2)
     await mobile.submit()
     await mobile.closed()
-    await desktop.stockSku(product.sku, 6)
-    await mobile.stockSku(product.sku, 6)
+    for (const page of inventoryClients) await page.stockSku(product.sku, 6)
   })
   const reference = { code: `MULTI-${run}`, name: `Jean variantes ${run}`, category: 'Jeans', description: 'Referencia compartida por varias tallas y colores.', kind: 'finished', unit: 'unidad' }
   const variants = [
     { sku: `QA-AZUL-${run}`, size: '32', color: 'Azul', lot: 'CI-2026', priceCents: 12990000, stock: 6, minStock: 1, unitCostCents: 4000000 },
     { sku: `QA-NEGRO-${run}`, size: '34', color: 'Negro', lot: 'CI-2026', priceCents: 12990000, stock: 4, minStock: 1, unitCostCents: 4200000 },
   ]
-  await check('One canonical reference supports distinct color and size stocks in real time', async () => {
+  for (const item of variants) referencesBySku.set(item.sku, reference.code)
+  await check('Two size/color variants form one product card and unavailable combinations cannot be selected', async () => {
     await desktop.click('Varias tallas y colores')
     await desktop.set('Referencia', reference.code)
     await desktop.set('Nombre común del producto', reference.name)
@@ -347,93 +387,250 @@ try {
     }
     await desktop.click('Guardar referencia y variantes')
     await desktop.closed()
-    for (const item of variants) {
-      await desktop.stockSku(item.sku, item.stock)
-      await mobile.stockSku(item.sku, item.stock)
-      await viewerPage.stockSku(item.sku, item.stock)
-      const row = await mobile.evaluate(`qaRow(${JSON.stringify(item.sku)}).textContent`)
-      assert.ok(row.includes(reference.name) && row.includes(item.size) && row.includes(item.color), row)
+    const first = await variantBySku(variants[0].sku)
+    const referenceKey = field(first.document, 'referenceKey')
+    for (const page of inventoryClients) {
+      await page.grid()
+      await page.wait(`qaButton(${JSON.stringify(`Ver variantes de ${reference.code}`)})`, 'shared reference group')
+      assert.equal(await page.evaluate(`document.querySelectorAll('.catalog-product-card[data-reference-key="${referenceKey}"]').length`), 1, page.name)
+      assert.equal(await page.evaluate(`!!qaRow(${JSON.stringify(variants[0].sku)}) || !!qaRow(${JSON.stringify(variants[1].sku)})`), false)
+      if (page === desktop) await page.screenshot('erp-grouped-products-desktop.png')
+      for (const item of variants) await page.stockSku(item.sku, item.stock)
     }
+    await viewerPage.click('Color Azul')
+    assert.equal(await viewerPage.evaluate(`qaButton('Talla 34').disabled`), true)
+    assert.equal(await viewerPage.evaluate(`qaButton('Talla 32').disabled`), false)
+    assert.equal(await viewerPage.evaluate(`document.querySelector('[data-selected-sku]')?.dataset.selectedSku`), variants[0].sku)
+    await viewerPage.click('Color Negro')
+    assert.equal(await viewerPage.evaluate(`qaButton('Talla 32').disabled`), true)
+    assert.equal(await viewerPage.evaluate(`qaButton('Talla 34').disabled`), false)
+    assert.equal(await viewerPage.evaluate(`document.querySelector('[data-selected-sku]')?.dataset.selectedSku`), variants[1].sku)
+    await desktop.screenshot('erp-size-color-detail-desktop.png')
+    await viewerPage.screenshot('erp-size-color-detail-viewer-mobile.png')
   })
-  await check('Editing a reference updates its common name on every size and color', async () => {
-    await desktop.rowClick(variants[0].sku, 'Editar referencia')
+  await check('Editing a reference changes its shared name across every role and preserves variant stocks', async () => {
+    await desktop.click('Editar referencia')
     reference.name += ' actualizado'
     await desktop.set('Nombre común del producto', reference.name)
     await desktop.click('Actualizar toda la referencia')
     await desktop.closed()
-    for (const item of variants) for (const page of [desktop, mobile, viewerPage]) await page.wait(`qaRow(${JSON.stringify(item.sku)})?.textContent.includes(${JSON.stringify(reference.name)})`, 'shared reference name updated live')
+    for (const page of inventoryClients) {
+      await page.wait(`document.querySelector('.catalog-detail-title h2')?.textContent === ${JSON.stringify(reference.name)}`, 'shared reference name updates live')
+      for (const item of variants) await page.stockSku(item.sku, item.stock)
+    }
   })
-  await check('A reference cannot be reused for a different product name', async () => {
+  await check('The server rejects a different product name for an existing reference and all operator catalog mutations', async () => {
     const conflictingSku = `QA-CONFLICT-${run}`
     const variant = { sku: conflictingSku, size: '36', color: 'Rojo', lot: 'CI-CONFLICT', priceCents: variants[0].priceCents, stock: 1, minStock: 0 }
-    await assert.rejects(command(operator, 'catalog.create', { reference: { ...reference, name: `Producto diferente ${run}` }, variants: [variant] }), /referencia|nombre/i)
+    await assert.rejects(command(admin, 'catalog.create', { reference: { ...reference, name: `Producto diferente ${run}` }, variants: [variant] }), /referencia|nombre/i)
+    await assert.rejects(command(operator, 'catalog.create', { reference: { code: `DENIED-${run}`, name: 'No autorizado' }, variants: [variant] }), /permiso|permission|autorizad/i)
+    const existing = await variantBySku(variants[0].sku)
+    for (const [action, payload] of [
+      ['catalog.variant', { variantId: existing.id, sku: variants[0].sku, size: '40' }],
+      ['catalog.archive', { variantId: existing.id, active: false }],
+      ['catalog.delete', { variantId: existing.id, confirmSku: variants[0].sku, reason: 'Intento no autorizado' }],
+      ['stock.adjust', { variantId: existing.id, quantity: -1, reason: 'Intento no autorizado' }],
+    ]) await assert.rejects(command(operator, action, payload), /permiso|permission|autorizad/i)
     assert.equal(await variantBySku(conflictingSku), null)
-    for (const item of variants) await desktop.stockSku(item.sku, item.stock)
+    await desktop.stockSku(variants[0].sku, 6)
   })
-  await check('Private acquisition costs are blocked by Firestore rules for operator and viewer', async () => {
+  await check('Firestore denies private acquisition costs to operator, seller and viewer accounts', async () => {
     const variant = await variantBySku(variants[0].sku)
     const url = `http://127.0.0.1:8080/v1/projects/${project}/databases/(default)/documents/organizations/${company}/costs/${variant.id}`
-    for (const [page, account] of [[mobile, operator], [viewerPage, viewer]]) {
+    for (const [page, account] of [[mobile, operator], [sellerPage, seller], [viewerPage, viewer]]) {
       const status = await page.evaluate(`fetch(${JSON.stringify(url)}, {headers:{Authorization:${JSON.stringify(`Bearer ${account.idToken}`)}}}).then(response=>response.status)`)
-      assert.equal(status, 403)
+      assert.equal(status, 403, page.name)
     }
     const document = await jsonRequest(url, { headers: { Authorization: `Bearer ${admin.idToken}` } })
     assert.equal(field(document, 'stockValueCents'), variants[0].stock * variants[0].unitCostCents)
   })
-  const materialSku = `QA-TELA-${run}`
-  await check('Material inventory is shared with operators and excluded from the viewer catalog', async () => {
-    await command(admin, 'catalog.create', { reference: { code: `TELA-${run}`, name: `Tela denim ${run}`, category: 'Insumos', kind: 'material', unit: 'cm' }, variants: [{ sku: materialSku, size: '', color: 'Azul', lot: 'ROLLO-CI', priceCents: 0, stock: 100, minStock: 5, unitCostCents: 1000 }] })
+  const materialSku = `QA-TELA-${run}`, materialReference = `TELA-${run}`
+  referencesBySku.set(materialSku, materialReference)
+  await check('Operators see warehouse materials while sellers and viewers only see finished products', async () => {
+    await command(admin, 'catalog.create', { reference: { code: materialReference, name: `Tela denim ${run}`, category: 'Insumos', kind: 'material', unit: 'cm' }, variants: [{ sku: materialSku, size: '', color: 'Azul', lot: 'ROLLO-CI', priceCents: 0, stock: 100, minStock: 5, unitCostCents: 1000 }] })
     await desktop.stockSku(materialSku, 100)
     await mobile.stockSku(materialSku, 100)
-    assert.equal(await viewerPage.evaluate(`!!qaRow(${JSON.stringify(materialSku)})`), false)
+    for (const page of [sellerPage, viewerPage]) {
+      await page.grid()
+      assert.equal(await page.evaluate(`!!qaButton(${JSON.stringify(`Ver variantes de ${materialReference}`)})`), false)
+    }
   })
-  await check('Admin can open every management area; operators cannot invoke sales commands', async () => {
+  await check('Every admin management area renders and the operator movement history contains its own receipts', async () => {
     for (const [label, heading] of [['Resumen', 'Dirección de la empresa'], ['Ventas', 'Ventas y cartera'], ['Compras', 'Compras y proveedores'], ['Producción', 'Producción y materiales'], ['Finanzas', 'Finanzas y libro de movimientos'], ['Personal', 'Personal y nómina'], ['Usuarios', 'Usuarios y permisos'], ['Auditoría', 'Trazabilidad y auditoría']]) {
       await desktop.click(label)
       await desktop.wait(`document.querySelector('main')?.textContent.includes(${JSON.stringify(heading)})`, `${label} panel renders`)
       assert.equal(await desktop.evaluate(`!!document.querySelector('main [role="alert"]')`), false, label)
     }
+    await desktop.click('Inventario')
+    await mobile.click('Movimientos')
+    await mobile.wait(`document.querySelector('main')?.textContent.includes(${JSON.stringify(product.sku)})`, 'operator sees its own receipt trace')
+    assert.equal(await mobile.evaluate(`document.querySelector('main')?.textContent.includes(${JSON.stringify(materialSku)})`), false, 'Admin material receipts are not operator history')
+    await mobile.click('Inventario')
     const variant = await variantBySku(variants[0].sku)
     await assert.rejects(command(operator, 'sales.create', { customerName: 'Cliente no autorizado', lines: [{ variantId: variant.id, quantity: 1 }], paidCents: 0 }), /permiso|permission|autorizad/i)
-    await desktop.click('Inventario')
     await mobile.stockSku(variants[0].sku, 6)
+    await viewerPage.stockSku(variants[0].sku, 6)
   })
-  await check('An admin sale, partial payment and reversal keep stock synchronized and accounting balanced', async () => {
+  let saleId
+  const customerName = `Cliente vendedor E2E ${run}`
+  await check('A seller records its own sale at the read-only catalog price and live stock drops on other devices', async () => {
     const variant = await variantBySku(variants[0].sku)
+    await sellerPage.click('Ventas')
+    await sellerPage.wait(`qaControl('Cliente') && qaControl('Variante 1')`, 'seller sales form ready')
+    assert.equal(await sellerPage.evaluate(`!!qaControl('Vendedor asignado') || !!document.querySelector('form[aria-label="Anular venta"]')`), false)
+    await sellerPage.set('Cliente', customerName)
+    await sellerPage.set('Variante 1', variant.id)
+    await sellerPage.set('Cantidad 1', 2)
+    assert.equal(await sellerPage.evaluate(`qaControl('Precio unitario 1 (COP)').readOnly`), true)
+    assert.equal(Number(await sellerPage.evaluate(`qaControl('Precio unitario 1 (COP)').value`)), variants[0].priceCents / 100)
+    await sellerPage.set('Abono inicial (COP)', 50000)
+    await sellerPage.set('Notas de la venta', 'Venta de validación desde el formulario real del vendedor.')
+    await sellerPage.click('Confirmar venta')
+    await sellerPage.wait(`document.querySelector('main')?.textContent.includes(${JSON.stringify(customerName)})`, 'own sale is visible in seller desk')
+    const sale = (await collection('sales')).find(item => field(item, 'customerName') === customerName)
+    assert.ok(sale, 'The seller form created an authenticated server sale')
+    saleId = sale.name.split('/').at(-1)
+    assert.equal(field(sale, 'sellerUid'), seller.uid)
+    for (const page of [desktop, mobile, viewerPage]) await page.stockSku(variants[0].sku, 4)
+    const projection = (await collection('salesDesk')).find(item => item.name.endsWith(`/${saleId}`))
+    assert.ok(projection, 'Seller has a separate public sale projection')
+    assert.equal('costCents' in projection.fields, false)
+    assert.equal('profitCents' in projection.fields, false)
+    assert.equal(JSON.stringify(projection).includes('inventoryAccount'), false)
+    await sellerPage.evaluate(`(()=>{const summary=[...document.querySelectorAll('summary')].find(el=>el.textContent.trim()===${JSON.stringify(`Venta ${saleId}`)});if(!summary)throw new Error('Missing own sale details');summary.click()})()`)
+    assert.equal(await sellerPage.evaluate(`!!qaButton('Confirmar anulación') || !!qaControl(${JSON.stringify(`Motivo de anulación de ${saleId}`)}) || !!qaControl(${JSON.stringify(`Vendedor para la venta ${saleId}`)}) || /costo|margen|utilidad/i.test(document.querySelector('main')?.textContent || '')`), false)
+    await sellerPage.set(`Pago del registro ${saleId} (COP)`, 50000)
+    await sellerPage.click('Confirmar pago')
+    await sellerPage.wait(`qaControl(${JSON.stringify(`Pago del registro ${saleId} (COP)`)})?.value === ''`, 'seller partial payment confirmed')
+    assert.equal(field((await collection('sales')).find(item => item.name.endsWith(`/${saleId}`)), 'paidCents'), 10000000)
+    await assert.rejects(command(seller, 'sales.void', { saleId, reason: 'No autorizado', refundConfirmed: true }), /permiso|permission|autorizad/i)
+  })
+  await check('A seller cannot view or collect another account sale or override the catalog price', async () => {
+    const variant = await variantBySku(variants[0].sku)
+    const foreignName = `Cliente privado administrador ${run}`
+    const foreign = await command(admin, 'sales.create', { customerName: foreignName, lines: [{ variantId: variant.id, quantity: 1 }], paidCents: 0 })
+    assert.ok(foreign.id)
     await desktop.click('Ventas')
-    await desktop.wait(`qaControl('Cliente') && qaControl('Variante 1')`, 'sales form ready')
-    await desktop.set('Cliente', `Cliente E2E ${run}`)
-    await desktop.set('Variante 1', variant.id)
-    await desktop.set('Cantidad 1', 2)
-    await desktop.set('Abono inicial (COP)', 50000)
-    await desktop.set('Notas de la venta', 'Venta de validación desde el formulario real de la aplicación.')
-    await desktop.click('Confirmar venta')
-    await desktop.wait(`document.querySelector('main').textContent.includes(${JSON.stringify(`Cliente E2E ${run}`)})`, 'sale visible in live sales panel')
-    const sale = (await collection('sales')).find(item => field(item, 'customerName') === `Cliente E2E ${run}`)
-    assert.ok(sale, 'The authenticated sales form created a real server record')
-    const saleId = sale.name.split('/').at(-1)
+    await desktop.wait(`document.querySelector('main')?.textContent.includes(${JSON.stringify(foreignName)})`, 'administrator sale exists in admin ledger')
+    assert.equal(await sellerPage.evaluate(`document.querySelector('main')?.textContent.includes(${JSON.stringify(foreignName)})`), false)
+    for (const name of ['sales', 'salesDesk']) {
+      const url = `http://127.0.0.1:8080/v1/projects/${project}/databases/(default)/documents/organizations/${company}/${name}/${foreign.id}`
+      assert.equal(await sellerPage.evaluate(`fetch(${JSON.stringify(url)}, {headers:{Authorization:${JSON.stringify(`Bearer ${seller.idToken}`)}}}).then(response=>response.status)`), 403)
+    }
+    await assert.rejects(command(seller, 'sales.pay', { saleId: foreign.id, amountCents: 100 }), /permiso|permission|autorizad|asignad|propia/i)
+    await assert.rejects(command(seller, 'sales.create', { customerName: 'Descuento no autorizado', lines: [{ variantId: variant.id, quantity: 1, unitPriceCents: 1 }], paidCents: 0 }), /precio|catálogo|catalog|descuento/i)
+    await command(admin, 'sales.void', { saleId: foreign.id, reason: 'Anular la venta sintética de otra cuenta tras validar aislamiento.' })
     await mobile.stockSku(variants[0].sku, 4)
     await viewerPage.stockSku(variants[0].sku, 4)
-    await desktop.evaluate(`(()=>{const summary=[...document.querySelectorAll('summary')].find(el=>el.textContent.trim()===${JSON.stringify(`Venta ${saleId}`)});if(!summary)throw new Error('Missing sale details');summary.click()})()`)
-    await desktop.set(`Pago del registro ${saleId} (COP)`, 50000)
-    await desktop.click('Confirmar pago')
-    await desktop.wait(`qaControl(${JSON.stringify(`Pago del registro ${saleId} (COP)`)}).value === ''`, 'partial payment confirmed')
-    const saleDoc = (await collection('sales')).find(item => item.name.endsWith(`/${saleId}`))
-    assert.equal(field(saleDoc, 'paidCents'), 10000000)
-    await desktop.set(`Motivo de anulación de ${saleId}`, 'Reversión de la venta sintética E2E.')
+    await sellerPage.screenshot('erp-sales-seller-mobile.png')
+    await desktop.click('Inventario')
+  })
+  await check('The admin reverses the seller sale with explicit refund confirmation and balanced accounting', async () => {
+    await desktop.click('Ventas')
+    await desktop.wait(`document.querySelector('main')?.textContent.includes(${JSON.stringify(customerName)})`, 'admin sees the seller sale')
+    await desktop.evaluate(`(()=>{const summary=[...document.querySelectorAll('summary')].find(el=>el.textContent.trim()===${JSON.stringify(`Venta ${saleId}`)});if(!summary)throw new Error('Missing admin sale details');summary.click()})()`)
+    await desktop.set(`Motivo de anulación de ${saleId}`, 'Reversión de la venta sintética del vendedor E2E.')
     await desktop.evaluate(`(()=>{const checkbox=document.querySelector('form[aria-label="Anular venta"] input[type="checkbox"]');if(!checkbox||!checkbox.required)throw new Error('Missing explicit refund confirmation');checkbox.click();if(!checkbox.checked)throw new Error('Refund confirmation did not register')})()`)
     await desktop.click('Confirmar anulación')
     await mobile.stockSku(variants[0].sku, 6)
     await viewerPage.stockSku(variants[0].sku, 6)
+    await sellerPage.wait(`document.querySelector('main')?.textContent.includes('Anulada')`, 'seller receives its sale reversal in real time')
     const entries = await collection('journals')
     assert.ok(entries.length > 0)
     for (const entry of entries) assert.equal(field(entry, 'debitCents'), field(entry, 'creditCents'), entry.name)
     await desktop.click('Inventario')
+    await sellerPage.click('Inventario')
     await desktop.stockSku(variants[0].sku, 6)
+    await sellerPage.stockSku(variants[0].sku, 6)
   })
-  await check('Admin migration preserves legacy IDs and printed QR codes without overwriting original records', async () => {
+  await check('Archiving a stocked variant preserves quantity and valuation and removes it from operational roles', async () => {
+    const expectedCost = (await collection('costs')).reduce((sum, item) => sum + (field(item, 'stockValueCents') || 0), 0)
+    await desktop.wait(`(()=>{const card=[...document.querySelectorAll('.stat-card')].find(el=>el.querySelector('.stat-label')?.textContent === 'Valor al costo registrado');return card?.querySelector('.stat-value')?.textContent === new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:2}).format(${expectedCost} / 100)})()`, 'private valuation has caught up after sale reversal')
+    const values = await desktop.evaluate(`[...document.querySelectorAll('.stat-card')].filter(el=>/Valor del inventario|Valor al costo registrado/.test(el.textContent)).map(el=>el.querySelector('.stat-value').textContent)`)
+    await desktop.rowClick(variants[0].sku, 'Archivar')
+    await desktop.set('Motivo', 'Pausar temporalmente la variante sin perder existencias.')
+    await desktop.click('Archivar variante')
+    await desktop.closed()
+    const archived = await variantBySku(variants[0].sku)
+    assert.equal(archived.stock, 6)
+    assert.equal(field(archived.document, 'active'), false)
+    assert.deepEqual(await desktop.evaluate(`[...document.querySelectorAll('.stat-card')].filter(el=>/Valor del inventario|Valor al costo registrado/.test(el.textContent)).map(el=>el.querySelector('.stat-value').textContent)`), values)
+    for (const page of [mobile, sellerPage, viewerPage]) await page.wait(`!qaRow(${JSON.stringify(variants[0].sku)})`, 'archived variant disappears from operational detail')
+    await desktop.grid()
+    await desktop.set('Estado del catálogo', 'archived')
+    await desktop.stockSku(variants[0].sku, 6)
+    await desktop.rowClick(variants[0].sku, 'Reactivar')
+    await desktop.set('Motivo', 'Reactivar la misma variante con sus existencias intactas.')
+    await desktop.click('Reactivar variante')
+    await desktop.closed()
+    await desktop.grid()
+    await desktop.set('Estado del catálogo', 'active')
+    for (const page of inventoryClients) await page.stockSku(variants[0].sku, 6)
+  })
+  await check('Admin deletion requires the exact SKU, writes stock off with history and restores metadata with zero stock', async () => {
+    await desktop.rowClick(variants[1].sku, 'Eliminar')
+    await desktop.set('Motivo', 'Baja explícita de una variante sintética para validar la papelera.')
+    await desktop.set('Confirmar SKU', 'SKU-INCORRECTO')
+    await desktop.click('Eliminar variante')
+    await desktop.wait(`document.querySelector('[role="dialog"] [role="alert"]')`, 'wrong typed SKU blocks deletion')
+    assert.equal((await variantBySku(variants[1].sku)).stock, 4)
+    await desktop.set('Confirmar SKU', variants[1].sku)
+    await desktop.click('Eliminar variante')
+    await desktop.closed()
+    const deleted = await variantBySku(variants[1].sku)
+    assert.equal(deleted.stock, 0)
+    assert.equal(field(deleted.document, 'deleted'), true)
+    const costs = (await collection('costs')).find(item => item.name.endsWith(`/${deleted.id}`))
+    assert.equal(field(costs, 'stockValueCents'), 0)
+    assert.ok((await collection('deletions')).some(item => (field(item, 'entries') || []).some(entry => entry.variantId === deleted.id && entry.stock === 4)), 'A private deletion record preserves the write-off snapshot')
+    for (const page of [mobile, sellerPage, viewerPage]) await page.wait(`!qaRow(${JSON.stringify(variants[1].sku)})`, 'deleted variant is hidden live')
+    await desktop.grid()
+    await desktop.set('Estado del catálogo', 'deleted')
+    await desktop.stockSku(variants[1].sku, 0)
+    await desktop.rowClick(variants[1].sku, 'Restaurar')
+    await desktop.set('Motivo', 'Restaurar únicamente los datos; las unidades dadas de baja no vuelven.')
+    await desktop.click('Restaurar variante')
+    await desktop.closed()
+    await desktop.grid()
+    await desktop.set('Estado del catálogo', 'active')
+    for (const page of inventoryClients) await page.stockSku(variants[1].sku, 0)
+    const restored = await variantBySku(variants[1].sku)
+    assert.equal(restored.id, deleted.id)
+    assert.equal(field(restored.document, 'deleted'), false)
+    assert.equal(restored.stock, 0)
+    for (const entry of await collection('journals')) assert.equal(field(entry, 'debitCents'), field(entry, 'creditCents'), entry.name)
+    await viewerPage.click('Color Negro')
+    assert.equal(await viewerPage.evaluate(`qaButton('Talla 34').disabled`), false, 'An exhausted but real combination remains selectable')
+    assert.ok(await viewerPage.evaluate(`qaButton('Talla 34').textContent.includes('Agotada')`))
+  })
+  await check('An admin can archive and reactivate a whole reference without erasing stock or variants', async () => {
+    await desktop.openReference(product.reference)
+    await desktop.click('Archivar referencia')
+    await desktop.set('Motivo', 'Pausa de toda la referencia sintética.')
+    await desktop.click('Archivar referencia')
+    await desktop.closed()
+    assert.equal((await variantBySku(product.sku)).stock, 6)
+    const key = field((await variantBySku(product.sku)).document, 'referenceKey')
+    assert.equal(field((await collection('references')).find(item => item.name.endsWith(`/${key}`)), 'active'), false)
+    for (const page of [mobile, sellerPage, viewerPage]) {
+      await page.grid()
+      await page.wait(`!qaButton(${JSON.stringify(`Ver variantes de ${product.reference}`)})`, 'archived reference is not available for operations')
+    }
+    await desktop.grid()
+    await desktop.set('Estado del catálogo', 'archived')
+    await desktop.openReference(product.reference)
+    await desktop.click('Reactivar referencia')
+    await desktop.set('Motivo', 'Reabrir la referencia conservando sus variantes y unidades.')
+    await desktop.click('Reactivar referencia')
+    await desktop.closed()
+    await desktop.grid()
+    await desktop.set('Estado del catálogo', 'active')
+    for (const page of inventoryClients) await page.stockSku(product.sku, 6)
+  })
+  await check('Admin migration preserves legacy IDs and real printed QR images without overwriting original records', async () => {
     const legacyId = `browser_legacy_${run}`
     const legacy = { name: `Jean anterior ${run}`, sku: `QA-LEGACY-${run}`, reference: 'Referencia anterior con espacios', category: 'Jeans', description: 'Producto sintético del esquema anterior.', imageUrl: '', size: '30', color: 'Gris', lot: 'LEGACY-CI', price: 50000, stock: 2, minStock: 1, currency: 'COP' }
+    referencesBySku.set(legacy.sku, legacy.reference)
     const fields = Object.fromEntries(Object.entries(legacy).map(([name, value]) => [name, typeof value === 'number' ? { integerValue: String(value) } : { stringValue: value }]))
     const url = `http://127.0.0.1:8080/v1/projects/${project}/databases/(default)/documents/organizations/${company}/products/${legacyId}`
     await jsonRequest(url, { method: 'PATCH', headers: { 'content-type': 'application/json', Authorization: 'Bearer owner' }, body: JSON.stringify({ fields }) })
@@ -443,6 +640,7 @@ try {
     await desktop.set(`Referencia de ${legacy.name}`, `LEG-${run}`)
     await desktop.click('Migrar productos seleccionados')
     await desktop.closed()
+    referencesBySku.set(legacy.sku, `LEG-${run}`)
     await desktop.stockSku(legacy.sku, 2)
     await mobile.stockSku(legacy.sku, 2)
     assert.equal((await variantBySku(legacy.sku)).id, legacyId)
@@ -451,17 +649,17 @@ try {
     await mobile.openScanner(true)
     await mobile.uploadQr(legacyQrFile)
     await mobile.closed()
-    await desktop.stockSku(legacy.sku, 3)
-    await viewerPage.stockSku(legacy.sku, 3)
+    for (const page of inventoryClients) await page.stockSku(legacy.sku, 3)
     const original = await jsonRequest(url, { headers: { Authorization: 'Bearer owner' } })
     assert.equal(field(original, 'stock'), 2)
     assert.equal(field(original, 'reference'), legacy.reference)
   })
   await desktop.screenshot('erp-inventory-desktop.png')
   await mobile.screenshot('erp-inventory-operator-mobile.png')
+  await sellerPage.screenshot('erp-inventory-seller-mobile.png')
   await viewerPage.screenshot('erp-inventory-viewer-mobile.png')
-  await check('Desktop and mobile inventories have no page-level horizontal overflow', async () => {
-    for (const page of [desktop, mobile, viewerPage]) {
+  await check('Desktop and all mobile role inventories have no page-level horizontal overflow', async () => {
+    for (const page of inventoryClients) {
       const size = await page.evaluate(`({viewport:innerWidth,scroll:document.documentElement.scrollWidth})`)
       assert.ok(size.scroll <= size.viewport + 1, `${page.name}: ${JSON.stringify(size)}`)
     }
@@ -474,22 +672,23 @@ try {
     await desktop.set('Correo electrónico', email)
     await desktop.set('Contraseña', password)
     await desktop.submit()
-    await desktop.wait(`document.body.textContent.includes('Acceso pendiente de aprobación')`, 'new user awaits admin approval')
+    await desktop.wait(`document.body?.textContent.includes('Acceso pendiente de aprobación')`, 'new user awaits admin approval')
     assert.equal(await desktop.evaluate(`!!qaButton('Añadir producto') || !!document.querySelector('table') || !!qaButton('Finanzas')`), false)
     const account = await jsonRequest('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-inventario-key', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password, returnSecureToken: true }) })
     accountsToRemove.push({ uid: account.localId, idToken: account.idToken })
   })
-  await check('ERP flows produce no JavaScript exceptions or console errors', async () => {
+  await check('The four-role ERP flows produce no JavaScript exceptions or console errors', async () => {
     assert.deepEqual(report.pageExceptions, [])
     assert.deepEqual(report.consoleErrors, [])
   })
+
   }
   report.passed = true
 } catch (error) {
   report.passed = false
   report.error = error.stack
   console.error(error.stack)
-  for (const page of [desktop, mobile, viewerPage].filter(Boolean)) {
+  for (const page of [desktop, mobile, sellerPage, viewerPage].filter(Boolean)) {
     try {
       report[`${page.name} body`] = await page.evaluate('document.body.innerText')
       if (setupSmoke) report[`${page.name} service worker`] = await page.evaluate(`(async()=>({secure:isSecureContext,state:document.readyState,controlled:Boolean(navigator.serviceWorker?.controller),registrations:(await navigator.serviceWorker.getRegistrations()).map(r=>({scope:r.scope,active:r.active?.state,installing:r.installing?.state,waiting:r.waiting?.state})),caches:await caches.keys(),register:await Promise.race([navigator.serviceWorker.register('/sw.js').then(r=>({scope:r.scope,active:r.active?.state,installing:r.installing?.state})).catch(e=>({name:e.name,message:e.message})),new Promise(resolve=>setTimeout(()=>resolve('registration timed out'),3000))])}))()`)

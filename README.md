@@ -4,7 +4,8 @@ Aplicación React instalable como PWA en computador, iPhone y Android. Firebase 
 
 ## Funciones
 
-- Catálogo por referencia con un solo nombre común y variantes de talla, color y lote; SKU y combinación únicos.
+- Catálogo agrupado por referencia; detalle con colores, tallas y lotes, cada combinación con SKU y stock propios.
+- Archivo con existencias, papelera con baja trazable y recuperación de fichas sin reponer automáticamente stock.
 - Ingreso manual o por QR; preparar y descargar un QR completo **antes de guardar** el producto no crea inventario.
 - Materias primas en unidades, centímetros o gramos; stock entero y costos de adquisición separados del precio de venta.
 - Ventas, compras, cuentas pendientes, pagos parciales y anulaciones con contrapartidas.
@@ -15,16 +16,19 @@ Aplicación React instalable como PWA en computador, iPhone y Android. Firebase 
 
 ## Permisos
 
-| Función | Administrador | Operador | Viewer |
-|---|---|---|---|
-| Consultar prendas, stock y precio unitario; ver QR | Sí | Sí | Sí |
-| Registrar variantes y entradas; editar datos de variante y nombre común | Sí | Sí | No |
-| Consultar materiales y movimientos | Sí | Sí | No |
-| Resumen del valor a precio de venta | Sí | No | Sí, como antes |
-| Costos privados, ventas, compras, producción, finanzas, personal, usuarios y auditoría | Sí | No | No |
-| Ajustar, valorar, archivar/reactivar y migrar | Sí | No | No |
+| Función | Administrador | Operador | Vendedor | Usuario |
+|---|---|---|---|---|
+| Consultar prendas, stock y QR | Sí | Sí | Sí | Sí |
+| Mostrar precio unitario en la interfaz | Sí | No | Sí | Sí |
+| Crear y editar productos, referencias, variantes y precios | Sí | No | No | No |
+| Ingresar stock positivo de variantes activas | Sí | Sí | No | No |
+| Consultar movimientos | Todos | Propios | No | No |
+| Registrar ventas y cobros | Todas | No | Propios, precio de catálogo | No |
+| Cambiar precios de venta, anular o asignar ventas | Sí | No | No | No |
+| Ver valor agregado, costos y módulos administrativos | Sí | No | No | No |
+| Ajustar, valorar, archivar, eliminar, recuperar y migrar | Sí | No | No | No |
 
-Los costos y documentos privados se protegen con reglas y comprobación de rol en el servidor. El operador conserva precio unitario y stock: podría calcular por su cuenta su valor a precio de venta. Ocultar el resumen no hace secreta esa información derivada. Los costos de adquisición sí se almacenan aparte y se deniegan al operador/viewer.
+Los costos y documentos privados se protegen con reglas y comprobación de rol en el servidor. El catálogo conserva precio unitario y stock: quien lo consulta puede calcular su valor de venta; los costos de adquisición permanecen privados. Consulta la [matriz completa y la guía del catálogo](docs/PERMISOS_Y_CATALOGO.md).
 
 ## Instalar en VS Code
 
@@ -62,11 +66,12 @@ npm.cmd run build -- --mode emulator
 npm.cmd run test:browser
 ```
 
-`test:cloud` comprueba reglas y servicios reales contra Firestore emulado. `test:browser` inicia Auth, Firestore y Functions y usa Chrome/Chromium con tres sesiones aisladas. Las pruebas usan datos sintéticos; no certifican cámaras físicas ni un despliegue de producción. El flujo de CI está en `.github/workflows/ci.yml`.
+`test:cloud` comprueba reglas y servicios reales contra Firestore emulado. `test:browser` inicia Auth, Firestore y Functions y usa Chrome/Chromium con sesiones aisladas por rol. Las pruebas usan datos sintéticos; no certifican cámaras físicas ni un despliegue de producción. El flujo de CI está en `.github/workflows/ci.yml`.
 
 ## Documentación
 
 - [Configuración Firebase, cámara y QR](docs/FIREBASE_Y_QR.md).
+- [Permisos, catálogo agrupado, archivo y papelera](docs/PERMISOS_Y_CATALOGO.md).
 - [Modelo, flujos y migración del ERP](docs/ERP.md).
 - [Arquitectura](docs/ARQUITECTURA.md).
 - [Alcance y límites](docs/EXLAIDER_ALCANCE.md).

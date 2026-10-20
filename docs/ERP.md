@@ -53,7 +53,9 @@ Los emuladores requieren Java y pueden descargar componentes la primera vez. Las
 3. Añade una fila por talla/color/lote, con SKU único, precio, stock inicial y mínimo. El administrador puede registrar el costo privado.
 4. Guarda las variantes. Hay un máximo de 20 por registro; después puedes añadir más a la misma referencia.
 
-El nombre pertenece a la referencia. `JN-101` no puede identificar simultáneamente «Jean cargo» y «Bermuda». Usa otra referencia para un producto diferente. Si se trata de una corrección, administrador u operador pueden editar el encabezado común y actualizar la presentación de todas sus variantes.
+El nombre pertenece a la referencia. `JN-101` no puede identificar simultáneamente «Jean cargo» y «Bermuda». Usa otra referencia para un producto diferente. El administrador puede corregir el encabezado común y actualizar la presentación de todas sus variantes. Sólo él crea o edita referencias, variantes y precios.
+
+El catálogo muestra un producto por referencia; abre **Ver variantes de…** para escoger color, talla y lote y consultar su SKU y stock reales. Revisa [permisos, archivo y papelera](PERMISOS_Y_CATALOGO.md).
 
 No repitas la misma combinación de talla, color y lote con otro SKU. Para sumar unidades utiliza recepción o compra. El tipo y la unidad se definen en el encabezado y no se cambian por variante.
 
@@ -61,9 +63,9 @@ Los SKU anteriores se conservan como alias reservados a la variante para que las
 
 ## QR antes de guardar
 
-Completa los campos y prepara el QR sin guardar. En el formulario de variantes, genera una etiqueta por fila. Incluye los campos permitidos de esa variante, tipo y unidad; no incluye costos privados ni permisos. Los QR anteriores siguen siendo compatibles y se interpretan como producto terminado/unidad cuando no contienen esos campos.
+Como administrador, completa los campos y prepara el QR sin guardar. En el formulario de variantes, genera una etiqueta por fila. Incluye los campos permitidos de esa variante, tipo y unidad; no incluye costos privados ni permisos. Los QR anteriores siguen siendo compatibles y se interpretan como producto terminado/unidad cuando no contienen esos campos.
 
-Generar el QR no crea productos ni modifica stock. Al escanear una etiqueta nueva, revisa el formulario y confirma el guardado. Para una variante existente prevalece su ficha vigente; una etiqueta antigua no sustituye el precio o stock actuales.
+Generar el QR no crea productos ni modifica stock. Al escanear una etiqueta nueva, el administrador revisa el formulario y confirma el guardado. El operador sólo recibe productos existentes; un QR desconocido solicita intervención del administrador. Para una variante existente prevalece su ficha vigente; una etiqueta antigua no sustituye el precio o stock actuales.
 
 Un texto muy extenso puede superar la capacidad del QR. Para un borrador que necesita todos los campos, acorta la descripción cuando lo indique la interfaz. En un producto guardado puede generarse una etiqueta compacta que consulta su ficha por identificación.
 
@@ -79,7 +81,9 @@ En iPhone abre la dirección HTTPS de Hosting y concede permiso de cámara. La l
 | Venta | Reduce stock y registra ingreso, costo y cartera; rechaza stock insuficiente. |
 | Ajuste administrativo | Corrige cantidades con motivo; usa el costo promedio para la salida y, por defecto, para la corrección positiva. |
 | Valorar existencias | Cambia el costo total de las unidades actuales sin alterar cantidades. |
-| Archivar/reactivar | Archiva con stock cero y conserva SKU e historial; permite reactivación. |
+| Archivar/reactivar | Conserva stock y costo, retira el artículo de operaciones normales y permite reactivarlo. |
+| Eliminar | Envía la ficha a papelera y da de baja expresamente el stock restante, con motivo, movimiento y asiento del costo. Conserva SKU e historial. |
+| Recuperar | Recupera la ficha; las unidades dadas de baja permanecen en cero hasta registrar su ingreso real. |
 
 La compra ya incorpora sus cantidades: no las ingreses otra vez por QR. El ingreso directo corresponde a una entrada fuera del flujo de proveedores. Con costo informado registra la contrapartida de ganancia de inventario; el responsable contable debe comprobar que representa el hecho registrado.
 
@@ -89,7 +93,7 @@ Los movimientos conservan responsable, fecha, cantidad anterior/nueva, motivo y 
 
 ## Ventas, compras y pagos
 
-El administrador introduce cliente/proveedor y líneas de variantes. El directorio de contactos permite reutilizarlos y el documento conserva su identificación al registrar la operación. Las ventas usan precio de catálogo o precio autorizado introducido; las compras requieren costo por línea.
+El administrador introduce cliente/proveedor y líneas de variantes. El directorio de contactos permite reutilizarlos y el documento conserva su identificación al registrar la operación. Las ventas administrativas usan precio de catálogo o precio autorizado introducido; las compras requieren costo por línea. El vendedor registra ventas propias con nombre de cliente y precios de catálogo verificados por el servidor, sin consultar el directorio privado, modificar precios ni anular. Registra pagos sólo de ventas propias o asignadas por un administrador.
 
 Puede registrarse un pago inicial y abonos hasta cubrir el saldo. El servidor rechaza pagos superiores a la deuda. Registrar un pago no ejecuta una transferencia ni un cobro bancario.
 
@@ -125,9 +129,9 @@ La caja es el saldo registrado, no una consulta bancaria. No hay conciliación b
 
 Auditoría conserva acción, actor, rol, documento e ID de comando. Los reversos corrigen operaciones sin borrar su rastro.
 
-El primer administrador se conserva desde la membresía existente. Crear una cuenta en Authentication no autoriza su ingreso. En Usuarios, un administrador aprueba un UID existente, asigna `admin`, `operator` o `viewer`, o lo desactiva. No puede retirarse a sí mismo el rol o el acceso: otro administrador debe hacerlo.
+El primer administrador se conserva desde la membresía existente. Crear una cuenta en Authentication no autoriza su ingreso. En Usuarios, un administrador aprueba un UID existente, asigna `admin`, `operator`, `seller` o `viewer`, o lo desactiva. No puede retirarse a sí mismo el rol o el acceso: otro administrador debe hacerlo.
 
-El administrador ve todos los módulos y costos. El operador mantiene creación/edición de variantes y encabezados, recepción y movimientos sin costos, sin tarjeta agregada. El viewer conserva consulta de productos terminados y su valor de venta, sin escrituras. Precio unitario y stock permiten calcular un valor de venta por cuenta propia; los costos de adquisición sí permanecen en documentos privados.
+El administrador gestiona todos los módulos y costos, incluido archivo, papelera y variantes. El operador sólo ingresa stock positivo y consulta sus movimientos. El vendedor registra ventas y cobros propios a precio de catálogo. El usuario (`viewer`) sólo consulta productos terminados. **Valor del inventario** es exclusivo del administrador. Precio unitario y stock permiten calcular un valor de venta por cuenta propia; los costos de adquisición sí permanecen en documentos privados.
 
 ## Migración segura
 

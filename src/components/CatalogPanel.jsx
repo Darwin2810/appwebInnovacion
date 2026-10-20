@@ -4,6 +4,9 @@ import ProductForm from './ProductForm'
 import { normalizeProduct } from '../lib/productModel'
 import { parseProductQr } from '../lib/qr'
 import { requestId } from '../lib/erpApi.js'
+import { colorSwatch, groupCatalog, hydrateCatalog, matchesCatalogGroup, productStatus } from '../lib/catalogView.js'
+import CatalogProductDetail from './catalog/CatalogProductDetail.jsx'
+import CatalogLifecycleForm from './catalog/CatalogLifecycleForm.jsx'
 import './CatalogPanel.css'
 
 const QrScanner = lazy(() => import('./QrScanner'))
@@ -11,7 +14,6 @@ const ProductQr = lazy(() => import('./ProductQr'))
 const currency = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 2 })
 const number = new Intl.NumberFormat('es-CO')
 const displayMoney = value => currency.format(Number(value || 0))
-const normalize = value => String(value || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 const identity = value => String(value || '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
 const referenceCode = value => /^[A-Za-z0-9._-]{1,60}$/.test(String(value || '').normalize('NFKC').trim())
 const priceCents = value => {
@@ -21,14 +23,14 @@ const priceCents = value => {
 }
 const failMessage = error => error?.message || 'No se pudo completar la operación. Revisa la conexión.'
 let variantSequence = 0
-const blankVariant = () => ({ rowId: `variant-row-${++variantSequence}`, sku: '', size: '', color: '', lot: '', price: '0', stock: '0', minStock: '5', unitCost: '' })
+const blankVariant = (price = 0) => ({ rowId: `variant-row-${++variantSequence}`, sku: '', size: '', color: '', lot: '', price: String(price), stock: '0', minStock: '5', unitCost: '' })
 const headerFromProduct = product => ({ code: product.reference, name: product.name, category: product.category, description: product.description, imageUrl: product.imageUrl, kind: product.kind || 'finished', unit: product.unit || 'unidad' })
 const headerFromReference = item => ({ code: item.code, name: item.name, category: item.category || 'General', description: item.description || '', imageUrl: item.imageUrl || '', kind: item.kind || 'finished', unit: item.unit || 'unidad' })
 
 function VariantReferenceForm({ references, initialReference, role, onSave, onCancel }) {
   const [selected, setSelected] = useState(initialReference?.id || initialReference?.code || '')
   const [header, setHeader] = useState(() => initialReference ? headerFromReference(initialReference) : { code: '', name: '', category: 'Jeans', description: '', imageUrl: '', kind: 'finished', unit: 'unidad' })
-  const [rows, setRows] = useState(() => [blankVariant()])
+  const [rows, setRows] = useState(() => [blankVariant(initialReference?.defaultPrice)])
   const [preview, setPreview] = useState(null), [error, setError] = useState(''), [working, setWorking] = useState(false)
   const locked = Boolean(selected)
   function changeHeader(event) { setHeader(value => ({ ...value, [event.target.name]: event.target.value, ...(event.target.name === 'kind' && event.target.value === 'finished' ? { unit: 'unidad' } : {}) })); setPreview(null); setError('') }
@@ -36,6 +38,7 @@ function VariantReferenceForm({ references, initialReference, role, onSave, onCa
     const value = event.target.value
     setSelected(value); setPreview(null); setError('')
     const found = references.find(item => (item.id || item.code) === value)
+    setRows([blankVariant(found?.defaultPrice)])
     setHeader(found ? headerFromReference(found) : { code: '', name: '', category: 'Jeans', description: '', imageUrl: '', kind: 'finished', unit: 'unidad' })
   }
   function changeRow(rowId, event) { setRows(value => value.map(row => row.rowId === rowId ? { ...row, [event.target.name]: event.target.value } : row)); setPreview(null); setError('') }
@@ -81,7 +84,7 @@ function VariantReferenceForm({ references, initialReference, role, onSave, onCa
       <div className="form-grid">{[['sku', 'SKU único', 'text', 40], ['size', 'Talla', 'text', 20], ['color', 'Color', 'text', 40], ['lot', 'Lote', 'text', 60], ['price', 'Precio de venta (COP)', 'number'], ['stock', 'Stock inicial', 'number'], ['minStock', 'Stock mínimo', 'number'], ...(role === 'admin' ? [['unitCost', 'Costo unitario (COP, privado)', 'number']] : [])].map(([name, label, type, maxLength]) => <div className="form-field" key={name}><label htmlFor={`${row.rowId}-${name}`}>{label}</label><input id={`${row.rowId}-${name}`} name={name} type={type} value={row[name]} onChange={event => changeRow(row.rowId, event)} maxLength={maxLength} required={['sku', 'price', 'stock', 'minStock'].includes(name)} min={type === 'number' ? 0 : undefined} max={type === 'number' ? ['price', 'unitCost'].includes(name) ? 1e12 : 1e9 : undefined} step={type === 'number' ? ['price', 'unitCost'].includes(name) ? '0.01' : '1' : undefined} /></div>)}</div>
       <div className="catalog-inline-actions"><button type="button" className="secondary-button" disabled={working} onClick={() => generateRowQr(row)}>Preparar QR de variante {index + 1}</button>{rows.length > 1 && <button type="button" className="icon-button danger" disabled={working} onClick={() => { setRows(value => value.filter(item => item.rowId !== row.rowId)); setPreview(null) }}>Quitar variante {index + 1}</button>}</div>
     </fieldset>)}</div>
-    <button type="button" className="secondary-button" disabled={working || rows.length >= 20} onClick={() => setRows(value => [...value, blankVariant()])}>Añadir otra talla / color</button>
+    <button type="button" className="secondary-button" disabled={working || rows.length >= 20} onClick={() => setRows(value => [...value, blankVariant(references.find(item => (item.id || item.code) === selected)?.defaultPrice)])}>Añadir otra talla / color</button>
     <p className="storage-note">Máximo 20 variantes por registro. Puedes añadir más después a la misma referencia. Generar un QR no guarda los productos ni incluye los costos privados.</p>
     {preview && <section className="catalog-draft-preview" aria-label="QR de variante sin registrar"><h3>QR sin registrar · {preview.sku}</h3><Suspense fallback={<p role="status">Generando QR…</p>}><ProductQr product={preview} draft /></Suspense></section>}
     {error && <p className="feedback is-error" role="alert">{error}</p>}
@@ -164,108 +167,125 @@ function MigrationForm({ products, references, onSave, onCancel }) {
 
 export default function CatalogPanel({ data, run, role, busy }) {
   const [search, setSearch] = useState(''), [category, setCategory] = useState('all'), [kind, setKind] = useState('all')
-  const [showArchived, setShowArchived] = useState(false), [dialog, setDialog] = useState(null), [direct, setDirect] = useState(false)
-  const [notice, setNotice] = useState(''), [error, setError] = useState(''), [working, setWorking] = useState(false)
+  const [status, setStatus] = useState('active'), [selectedGroup, setSelectedGroup] = useState(null), [dialog, setDialog] = useState(null), [direct, setDirect] = useState(false)
+  const [notice, setNotice] = useState(''), [error, setError] = useState('')
   const pendingCommand = useRef(null)
   const close = useCallback(() => setDialog(null), [])
-  const writable = ['admin', 'operator'].includes(role)
-  const canWrite = writable && !busy && !data.loading && !data.error && !data.fromCache && navigator.onLine
-  const references = data.references || [], variants = data.variants || []
-  const referenceMap = new Map(references.map(reference => [reference.id || reference.referenceKey, reference]))
-  const variantIds = new Set(variants.map(variant => variant.id))
-  const legacyProducts = (data.legacyProducts || []).filter(product => !variantIds.has(product.id)).map(product => ({ ...product, legacy: true, kind: product.kind || 'finished', unit: product.unit || 'unidad' }))
-  const allProducts = new Map((data.products || []).map(product => [product.id, product]))
-  legacyProducts.forEach(product => { if (!allProducts.has(product.id)) allProducts.set(product.id, product) })
-  variants.forEach(variant => {
-    if (allProducts.has(variant.id)) return
-    const reference = referenceMap.get(variant.referenceKey)
-    if (reference) allProducts.set(variant.id, { ...variant, ...headerFromProduct({ ...reference, reference: reference.code }), id: variant.id, reference: reference.code, referenceKey: variant.referenceKey, kind: variant.kind || reference.kind, price: (variant.priceCents || 0) / 100, legacy: false })
-  })
-  const all = [...allProducts.values()].filter(product => role !== 'viewer' || (product.kind || 'finished') === 'finished')
-  const products = all.filter(product => showArchived && role === 'admin' ? true : product.active !== false)
-  const active = all.filter(product => product.active !== false)
-  const categories = [...new Set(products.map(product => product.category || 'General'))].sort()
-  const query = normalize(search.trim())
-  const visible = products.filter(product => (category === 'all' || (product.category || 'General') === category) && (kind === 'all' || (product.kind || 'finished') === kind) && normalize([product.name, product.sku, ...(Array.isArray(product.skuAliases) ? product.skuAliases : []), product.reference, product.size, product.color, product.lot, product.category].join(' ')).includes(query))
+  const admin = role === 'admin', intake = ['admin', 'operator'].includes(role)
+  const canWrite = intake && !busy && !data.loading && !data.error && !data.fromCache && navigator.onLine
+  const references = data.references || []
+  const all = hydrateCatalog(data, role)
+  const catalog = admin ? all : all.filter(product => product.active && !product.deleted)
+  const groups = groupCatalog(catalog, references)
+  const currentGroup = groups.find(group => group.key === selectedGroup)
+  const liveGroups = groups.filter(group => group.products.some(product => productStatus(product) === 'active'))
+  const legacyProducts = all.filter(product => product.legacy && !product.deleted)
+  const active = catalog.filter(product => product.active && !product.deleted)
+  const existing = catalog.filter(product => !product.deleted)
+  const currentStatus = admin ? status : 'active'
+  const statusGroups = groups.filter(group => group.products.some(product => productStatus(product) === currentStatus))
+  const categories = [...new Set(statusGroups.map(group => group.category))].sort()
+  const visible = statusGroups.filter(group => (category === 'all' || group.category === category) && (kind === 'all' || group.kind === kind) && matchesCatalogGroup(group, search))
+  const referenceOptions = references.filter(reference => reference.active !== false && !reference.deleted).map(reference => ({ ...reference, defaultPrice: groups.find(group => group.referenceKey === (reference.id || reference.referenceKey))?.defaultPrice || 0 }))
   const stats = [
-    ['Referencias', number.format(new Set(active.map(product => product.referenceKey || identity(product.reference) || product.id)).size), 'Un producto por referencia'],
+    ['Referencias', number.format(liveGroups.length), 'Un producto por referencia'],
     ['Variantes', number.format(active.length), 'Tallas, colores y lotes activos'],
-    ['Unidades terminadas', number.format(active.filter(product => (product.kind || 'finished') === 'finished').reduce((total, product) => total + (product.stock || 0), 0)), 'Productos terminados disponibles'],
-    ['Stock bajo', number.format(active.filter(product => product.stock <= product.minStock).length), 'En el mínimo o por debajo'],
+    ['Unidades terminadas', number.format(active.filter(product => product.kind === 'finished').reduce((sum, product) => sum + product.stock, 0)), 'Stock disponible en referencias activas'],
+    ['Stock bajo', number.format(active.filter(product => product.stock <= product.minStock).length), 'Variantes en el mínimo o por debajo'],
   ]
-  if (role !== 'operator') stats.push(['Valor del inventario', displayMoney(active.reduce((total, product) => total + (product.stock || 0) * (product.price || 0), 0)), 'Stock × precio de venta · COP'])
-  if (role === 'admin') stats.push(['Valor al costo registrado', displayMoney((data.costs || []).reduce((total, cost) => total + (cost.stockValueCents || 0), 0) / 100), 'Privado · sin estimar costos desconocidos'])
+  if (admin) {
+    stats.push(['Valor del inventario', displayMoney(existing.reduce((sum, product) => sum + product.stock * Number(product.price || 0), 0)), 'A precio de venta · incluye archivados'])
+    stats.push(['Valor al costo registrado', displayMoney((data.costs || []).reduce((sum, cost) => sum + Number(cost.stockValueCents || 0), 0) / 100), 'Privado · incluye stock archivado'])
+  }
   async function command(action, payload) {
     if (!canWrite) throw new Error('Espera la conexión con la nube para guardar. El QR sin guardar puede prepararse sin conexión.')
+    if (!admin && action !== 'stock.receive') throw new Error('Solo el administrador puede modificar el catálogo.')
+    if (['catalog.delete', 'catalog.deleteReference'].includes(action) && data.privateLoading) throw new Error('Espera a que se sincronicen los costos antes de confirmar la baja.')
+    if (payload.variantId) {
+      const current = all.find(product => product.id === payload.variantId)
+      if (!current || current.legacy) throw new Error('El producto ya no está disponible o debe migrarse antes de registrar movimientos.')
+      if (current.deleted && !['catalog.restore'].includes(action)) throw new Error('La variante o su referencia está en la papelera. Restáurala antes de continuar.')
+      if (['stock.receive', 'stock.adjust'].includes(action) && !current.active) throw new Error('La variante o su referencia está archivada. Reactívala antes de registrar movimientos.')
+    }
+    if (action === 'catalog.create') {
+      const known = references.find(reference => identity(reference.code) === identity(payload.reference?.code))
+      if (known && (known.active === false || known.deleted)) throw new Error('Reactiva la referencia antes de añadir variantes.')
+    }
     const fingerprint = JSON.stringify({ action, payload })
     if (!pendingCommand.current || pendingCommand.current.fingerprint !== fingerprint) pendingCommand.current = { fingerprint, id: requestId() }
     const pending = pendingCommand.current
-    // Preserve the command identity after a failed or lost response. Retrying
-    // the same form must confirm the original operation, not duplicate it.
     const result = await run(action, payload, pending.id)
     if (pendingCommand.current === pending) pendingCommand.current = null
     return result
   }
+  async function complete(action, payload, success) {
+    const currentDialog = dialog
+    await command(action, payload)
+    setNotice(success)
+    setDialog(current => current === currentDialog ? null : current)
+  }
+  const dialogProduct = all.find(product => product.id === dialog?.productId)
+  const dialogGroup = groups.find(group => group.key === dialog?.groupKey) || groups.find(group => group.referenceKey === dialog?.referenceKey)
+  const currentReference = dialogGroup?.header ? { ...dialogGroup.header, defaultPrice: dialogGroup.defaultPrice } : null
   async function saveProduct(product) {
     if (dialog.mode === 'edit') {
-      await command('catalog.variant', { variantId: dialog.product.id, sku: product.sku, size: product.size, color: product.color, lot: product.lot, priceCents: priceCents(product.price), minStock: product.minStock })
-      setNotice('Variante actualizada. El stock y los datos de la referencia se conservaron.')
+      if (!dialogProduct) throw new Error('La variante ya no está disponible. Actualiza el catálogo.')
+      await complete('catalog.variant', { variantId: dialogProduct.id, sku: product.sku, size: product.size, color: product.color, lot: product.lot, priceCents: priceCents(product.price), minStock: product.minStock }, 'Variante actualizada. El stock y los datos de la referencia se conservaron.')
     } else {
       const variant = { sku: product.sku, size: product.size, color: product.color, lot: product.lot, priceCents: priceCents(product.price), stock: product.stock, minStock: product.minStock }
-      if (role === 'admin' && product.unitCostCents !== undefined) variant.unitCostCents = product.unitCostCents
-      await command('catalog.create', { reference: headerFromProduct(product), variants: [variant] })
-      setNotice('Producto añadido al inventario y compartido en tiempo real.')
+      if (product.unitCostCents !== undefined) variant.unitCostCents = product.unitCostCents
+      await complete('catalog.create', { reference: headerFromProduct(product), variants: [variant] }, 'Producto añadido y compartido en tiempo real.')
     }
-    setDialog(current => current === dialog ? null : current)
   }
-  async function complete(action, payload, success) { const currentDialog = dialog; await command(action, payload); setNotice(success); setDialog(current => current === currentDialog ? null : current) }
-  async function archive() {
-    setWorking(true); setError('')
-    try { await complete('catalog.archive', { variantId: dialog.product.id, active: dialog.product.active === false }, dialog.product.active === false ? 'Variante reactivada.' : 'Variante archivada. Su historial se conserva.') }
-    catch (failure) { setError(failMessage(failure)) } finally { setWorking(false) }
+  function open(mode, product, group) {
+    setError('')
+    const selected = group || groups.find(item => item.products.some(candidate => candidate.id === product?.id)) || currentGroup
+    setDialog({ mode, productId: product?.id, groupKey: selected?.key, referenceKey: selected?.referenceKey })
   }
   async function scan(raw) {
     if (!canWrite) throw new Error('Espera la conexión con la nube para comprobar el QR.')
     const parsed = parseProductQr(raw)
     const found = (parsed.id && all.find(product => product.id === parsed.id)) || (parsed.sku && all.find(product => [product.sku, ...(Array.isArray(product.skuAliases) ? product.skuAliases : [])].some(sku => identity(sku) === identity(parsed.sku))))
     if (found) {
-      if (found.legacy) throw new Error('Este producto pertenece al inventario anterior. Un administrador debe migrarlo antes de registrar movimientos.')
-      if (found.active === false) throw new Error('Esta variante está archivada. Un administrador debe reactivarla antes de ingresar stock.')
-      if (direct) await complete('stock.receive', { variantId: found.id, quantity: 1, reason: 'Ingreso directo por QR' }, `Ingreso registrado: 1 ${found.unit || 'unidad'} de ${found.name}.`)
-      else setDialog({ mode: 'receive', product: found })
+      if (found.legacy) throw new Error('Un administrador debe migrar este producto del inventario anterior antes de ingresar stock.')
+      if (found.deleted || !found.active) throw new Error('Esta variante o su referencia está archivada o eliminada. El administrador debe restablecerla antes de ingresar stock.')
+      if (direct) await complete('stock.receive', { variantId: found.id, quantity: 1, reason: 'Ingreso directo por QR' }, `Ingreso registrado: 1 ${found.unit} de ${found.name}.`)
+      else open('receive', found)
       return
     }
-    if (parsed.kind === 'sku' || !parsed.fields?.name) throw new Error('El código no está registrado. Usa un QR con los datos completos o añade el producto.')
+    if (!admin) throw new Error('El código no está registrado. Solicita al administrador crear la referencia y sus variantes; el operador solo puede agregar stock existente.')
+    if (parsed.kind === 'sku' || !parsed.fields?.name) throw new Error('El código no está registrado. Usa un QR con los datos completos o añade el producto como administrador.')
     setNotice('Datos leídos del QR. Revisa la referencia, el SKU y los campos antes de guardar.')
     setDialog({ mode: 'create', initialValues: { ...parsed.fields, sku: parsed.sku || '' } })
   }
-  function open(mode, product) { setError(''); setDialog({ mode, product }) }
-  const currentReference = dialog?.product ? referenceMap.get(dialog.product.referenceKey) : null
-  const titles = { create: 'Añadir producto', edit: 'Editar variante', variants: 'Referencia, tallas y colores', reference: 'Editar referencia', receive: 'Ingresar stock', adjust: 'Ajustar stock', scan: 'Escanear código QR', qr: 'QR del producto', archive: 'Archivar o reactivar variante', value: 'Valorar existencias', migrate: 'Migrar inventario anterior' }
+  const lifecycle = ['archive', 'referenceState', 'delete', 'deleteReference', 'restore', 'restoreReference'].includes(dialog?.mode)
+  const lifecycleAction = { archive: 'catalog.archive', referenceState: 'catalog.referenceState', delete: 'catalog.delete', deleteReference: 'catalog.deleteReference', restore: 'catalog.restore', restoreReference: 'catalog.restoreReference' }
+  const titles = { create: 'Añadir producto', edit: 'Editar variante', variants: 'Referencia, tallas y colores', reference: 'Editar referencia', receive: 'Ingresar stock', adjust: 'Ajustar stock', scan: 'Escanear código QR', qr: 'QR del producto', archive: 'Archivar o reactivar variante', referenceState: 'Archivar o reactivar referencia', delete: 'Eliminar variante', deleteReference: 'Eliminar referencia', restore: 'Restaurar variante', restoreReference: 'Restaurar referencia', value: 'Valorar existencias', migrate: 'Migrar inventario anterior' }
+  const staleDialog = dialog?.productId && !dialogProduct
   return <div className="catalog-module">
-    <div className="page-heading"><div className="heading-copy"><p className="eyebrow">CATÁLOGO CENTRALIZADO</p><h1>Inventario de EXLAIDER</h1><p>Una referencia, un producto y todas sus tallas, colores y lotes.</p></div>{writable && <div className="heading-actions"><button className="secondary-button" disabled={!canWrite} onClick={() => open('scan')}>Escanear QR</button><button className="secondary-button" disabled={Boolean(busy)} onClick={() => open('variants')}>Varias tallas y colores</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => open('create')}>Añadir producto</button></div>}</div>
+    <div className="page-heading"><div className="heading-copy"><p className="eyebrow">CATÁLOGO CENTRALIZADO</p><h1>Inventario de EXLAIDER</h1><p>Una referencia, un producto. Explora sus tallas, colores y existencias.</p></div>{intake && <div className="heading-actions"><button className="secondary-button" disabled={!canWrite} onClick={() => open('scan')}>Escanear QR</button>{admin && <><button className="secondary-button" disabled={Boolean(busy)} onClick={() => { setDialog({ mode: 'variants' }); setError('') }}>Varias tallas y colores</button><button className="primary-button" disabled={Boolean(busy)} onClick={() => { setDialog({ mode: 'create' }); setError('') }}>Añadir producto</button></>}</div>}</div>
     <section className="stats-grid catalog-stats" aria-label="Resumen del inventario">{stats.map(([label, value, caption]) => <article className="stat-card" key={label}><p className="stat-label">{label}</p><p className="stat-value">{value}</p><p className="stat-caption">{caption}</p></article>)}</section>
     {notice && <p className="feedback is-success" role="status">{notice}</p>}
-    {error && !dialog && <p className="feedback is-error" role="alert">{error}</p>}
-    {legacyProducts.length > 0 && <aside className="catalog-migration-banner"><div><strong>{legacyProducts.length} productos del inventario anterior</strong><p>Se muestran en modo de solo lectura hasta revisar sus referencias y migrarlos al catálogo con trazabilidad.</p></div>{role === 'admin' && <button className="secondary-button" disabled={!canWrite} onClick={() => open('migrate')}>Revisar y migrar inventario</button>}</aside>}
-    <section className="inventory-panel" aria-labelledby="catalog-products-title"><div className="panel-toolbar"><div className="panel-title"><h2 id="catalog-products-title">Tus productos</h2><span>{visible.length} de {products.length} variantes</span></div><div className="toolbar-actions"><label className="search-field"><span className="sr-only">Buscar productos</span><input type="search" aria-label="Buscar productos" placeholder="Referencia, talla, color, lote o nombre" value={search} onChange={event => setSearch(event.target.value)} /></label><select className="filter-select" aria-label="Filtrar por categoría" value={category} onChange={event => setCategory(event.target.value)}><option value="all">Todas las categorías</option>{categories.map(value => <option key={value}>{value}</option>)}</select>{role !== 'viewer' && <select className="filter-select" aria-label="Filtrar por tipo" value={kind} onChange={event => setKind(event.target.value)}><option value="all">Productos e insumos</option><option value="finished">Productos terminados</option><option value="material">Materias primas</option></select>}</div></div>
-      {role === 'admin' && <label className="catalog-show-archived"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />Incluir variantes archivadas</label>}
-      {visible.length ? <div className="table-wrap"><table className="inventory-table catalog-table" aria-label="Productos del inventario"><thead><tr><th>Producto</th><th>Referencia y variante</th><th>Stock</th><th>Precio unitario</th>{role === 'admin' && <th>Costo registrado</th>}<th>Acciones</th></tr></thead><tbody>{visible.map(product => {
-        const cost = role === 'admin' ? (data.costs || []).find(item => item.id === product.id) : null
-        return <tr key={product.id} data-sku={product.sku} data-variant-id={product.id} className={product.active === false ? 'catalog-archived' : ''}><td><div className="product-cell">{product.imageUrl && <img className="product-image" src={product.imageUrl} alt={product.name} loading="lazy" referrerPolicy="no-referrer" />}<div><span className="product-name">{product.name}</span><span className="product-sku">{product.sku || 'Sin SKU'} · {product.category || 'General'}</span>{product.description && <p className="product-description">{product.description}</p>}<span className="catalog-type-label">{product.kind === 'material' ? 'Materia prima' : 'Producto terminado'}{product.legacy ? ' · Pendiente de migración' : product.active === false ? ' · Archivada' : ''}</span></div></div></td><td><strong>{product.reference || 'Sin referencia'}</strong><span className="product-sku">Talla {product.size || '—'} · {product.color || 'Sin color'} · Lote {product.lot || '—'}</span></td><td><span className={`stock-badge ${product.stock <= product.minStock ? 'is-low' : 'is-good'}`}>{number.format(product.stock || 0)} {product.unit || 'unidad'}</span><span className="product-sku">Mínimo: {number.format(product.minStock || 0)}</span></td><td>{displayMoney(product.price)}</td>{role === 'admin' && <td><span>{cost ? displayMoney(cost.stockValueCents / 100) : 'Sin valorar'}</span><span className="product-sku">{cost && product.stock > 0 ? `${displayMoney(cost.stockValueCents / product.stock / 100)} / ${product.unit || 'unidad'}` : 'Costo total en stock'}</span>{cost?.unvaluedQuantity > 0 && <span className="catalog-field-warning">{number.format(cost.unvaluedQuantity)} sin valorar</span>}</td>}<td><div className="row-actions"><button className="secondary-button" aria-label={`Ver QR de ${product.name}`} onClick={() => open('qr', product)}>QR</button>{writable && !product.legacy && product.active !== false && <><button className="secondary-button" disabled={!canWrite} aria-label={`Ingresar stock de ${product.name}`} onClick={() => open('receive', product)}>Ingresar stock</button><button className="icon-button" disabled={!canWrite} aria-label={`Editar variante ${product.sku}`} onClick={() => open('edit', product)}>Editar variante</button><button className="icon-button" disabled={!canWrite} aria-label={`Añadir variante a referencia ${product.reference}`} onClick={() => open('variants', product)}>Añadir talla/color</button><button className="icon-button" disabled={!canWrite} aria-label={`Editar referencia ${product.reference}`} onClick={() => open('reference', product)}>Editar referencia</button></>}{role === 'admin' && !product.legacy && <>{product.active !== false && <><button className="icon-button" disabled={!canWrite} aria-label={`Ajustar stock de ${product.sku}`} onClick={() => open('adjust', product)}>Ajustar stock</button>{product.stock > 0 && <button className="icon-button" disabled={!canWrite} aria-label={`Valorar existencias de ${product.sku}`} onClick={() => open('value', product)}>Valorar existencias</button>}</>}<button className="icon-button danger" disabled={!canWrite || (product.active !== false && product.stock !== 0)} title={product.stock !== 0 ? 'El stock debe ser cero antes de archivar.' : undefined} aria-label={`${product.active === false ? 'Reactivar' : 'Archivar'} variante ${product.sku}`} onClick={() => open('archive', product)}>{product.active === false ? 'Reactivar' : 'Archivar'}</button></>}</div></td></tr>
-      })}</tbody></table></div> : <div className="empty-state"><h3>{data.loading ? 'Cargando productos…' : products.length ? 'No hay coincidencias' : 'Tu inventario está listo para empezar'}</h3><p>{products.length ? 'Prueba con otra referencia, nombre o variante.' : 'Agrega una referencia y sus tallas o colores. Los cambios aparecerán en los otros dispositivos.'}</p></div>}
-    </section>
-    <p className="storage-note">El precio de venta sigue visible en cada producto. Los costos de compra y los módulos financieros se consultan exclusivamente desde una cuenta administradora.</p>
+    {error && <p className="feedback is-error" role="alert">{error}</p>}
+    {legacyProducts.length > 0 && <aside className="catalog-migration-banner"><div><strong>{legacyProducts.length} productos del inventario anterior</strong><p>Sus datos se conservan en consulta hasta revisar las referencias y migrarlos con trazabilidad.</p></div>{admin && <button className="secondary-button" disabled={!canWrite} onClick={() => open('migrate')}>Revisar y migrar inventario</button>}</aside>}
+    {selectedGroup ? currentGroup ? <CatalogProductDetail key={currentGroup.key} group={currentGroup} role={role} canWrite={canWrite} costs={admin ? data.costs || [] : []} onOpen={open} onBack={() => setSelectedGroup(null)} status={currentStatus} /> : <section className="inventory-panel empty-state"><h3>La referencia cambió de estado</h3><p>Su disponibilidad se ha actualizado en tiempo real.</p><button className="secondary-button" onClick={() => setSelectedGroup(null)}>Volver a productos</button></section> : <section className="inventory-panel" aria-labelledby="catalog-products-title">
+      <div className="panel-toolbar"><div className="panel-title"><h2 id="catalog-products-title">Tus productos</h2><span>{visible.length} de {statusGroups.length} referencias</span></div><div className="toolbar-actions"><label className="search-field"><span className="sr-only">Buscar productos</span><input type="search" aria-label="Buscar productos" placeholder="Referencia, nombre, SKU, talla o color" value={search} onChange={event => setSearch(event.target.value)} /></label><select className="filter-select" aria-label="Filtrar por categoría" value={category} onChange={event => setCategory(event.target.value)}><option value="all">Todas las categorías</option>{categories.map(value => <option key={value}>{value}</option>)}</select>{['admin', 'operator'].includes(role) && <select className="filter-select" aria-label="Filtrar por tipo" value={kind} onChange={event => setKind(event.target.value)}><option value="all">Productos e insumos</option><option value="finished">Productos terminados</option><option value="material">Materias primas</option></select>}{admin && <select className="filter-select" aria-label="Estado del catálogo" value={status} onChange={event => { setStatus(event.target.value); setCategory('all') }}><option value="active">Activos</option><option value="archived">Archivados</option><option value="deleted">Papelera</option></select>}</div></div>
+      <div className="catalog-collection-note"><span>{currentStatus === 'deleted' ? 'Papelera · el historial y los SKU se conservan' : currentStatus === 'archived' ? 'Archivados · el stock se conserva y no admite movimientos' : 'Cada producto reúne todas sus tallas, colores y lotes'}</span><span>{number.format(statusGroups.reduce((sum, group) => sum + group.products.filter(product => productStatus(product) === currentStatus).length, 0))} variantes</span></div>
+      {visible.length ? <div className="catalog-products-grid">{visible.map(group => { const items = group.products.filter(product => productStatus(product) === currentStatus), quantity = items.reduce((sum, product) => sum + product.stock, 0); return <article className="catalog-product-card" data-reference-key={group.referenceKey || group.key} key={group.key}><button className="catalog-card-open" aria-label={`Ver variantes de ${group.code}`} onClick={() => setSelectedGroup(group.key)}><div className="catalog-card-image">{group.imageUrl ? <img src={group.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <div className="catalog-card-placeholder"><span>{group.category}</span><strong>{group.code}</strong><span>EXLAIDER</span></div>}<span className="catalog-card-kind">{group.kind === 'material' ? 'Insumo' : 'Producto'}</span></div><div className="catalog-card-body"><p className="catalog-card-reference">REF. {group.code}</p><div className="catalog-card-title"><h3>{group.name}</h3><span aria-hidden="true">↗</span></div>{role !== 'operator' && <p className="catalog-card-price">{displayMoney(group.minPrice)}{group.maxPrice !== group.minPrice ? ` – ${displayMoney(group.maxPrice)}` : ''}</p>}<div className="catalog-card-colors" aria-label={`Colores de ${group.name}`}>{group.colors.slice(0, 7).map(color => <span className="catalog-swatch" style={{ background: colorSwatch(color) }} title={color} key={color} />)}<small>{group.colors.length} {group.colors.length === 1 ? 'color' : 'colores'} · {group.sizes.length} {group.sizes.length === 1 ? 'talla' : 'tallas'}</small></div><div className="catalog-card-footer"><strong>{number.format(quantity)} <small>{group.unit}</small></strong><span>{items.length} {items.length === 1 ? 'variante' : 'variantes'} · Ver detalle →</span></div>{group.legacy && <span className="catalog-field-warning">Pendiente de migración</span>}</div></button></article> })}</div> : <div className="empty-state"><h3>{data.loading ? 'Cargando productos…' : statusGroups.length ? 'No hay coincidencias' : currentStatus === 'deleted' ? 'La papelera está vacía' : currentStatus === 'archived' ? 'No hay productos archivados' : 'Tu inventario está listo para empezar'}</h3><p>{statusGroups.length ? 'Prueba con otra referencia, nombre, talla o color.' : admin ? 'Gestiona tus referencias y sus variantes. Los cambios se sincronizan entre dispositivos.' : 'Aquí aparecerán los productos habilitados por el administrador.'}</p></div>}
+    </section>}
+    <p className="storage-note">{role === 'operator' ? 'Operador: consulta existencias e ingresa stock de variantes registradas. La creación y los cambios del catálogo corresponden al administrador.' : admin ? 'Las referencias archivadas conservan sus unidades y su valoración. Eliminar da de baja existencias con trazabilidad y conserva el historial en la papelera.' : role === 'seller' ? 'Vendedor: consulta productos y registra tus ventas desde el módulo Ventas.' : 'Usuario: consulta productos, tallas, colores y códigos QR en tiempo real.'}</p>
     {dialog && <Modal title={titles[dialog.mode]} onClose={close}>
-      {['create', 'edit'].includes(dialog.mode) && <ProductForm product={dialog.product} initialValues={dialog.initialValues} onSave={saveProduct} onCancel={close} role={role} referenceOptions={references} lockedReference={dialog.mode === 'edit'} />}
-      {dialog.mode === 'variants' && <VariantReferenceForm references={references} initialReference={currentReference} role={role} onSave={payload => complete('catalog.create', payload, 'Referencia y variantes guardadas.')} onCancel={close} />}
-      {dialog.mode === 'reference' && currentReference && <ReferenceForm reference={currentReference} onSave={payload => complete('catalog.reference', payload, 'Referencia actualizada en todas sus variantes.')} onCancel={close} />}
-      {['receive', 'adjust'].includes(dialog.mode) && <StockMovementForm product={dialog.product} adjustment={dialog.mode === 'adjust'} role={role} onSave={payload => complete(dialog.mode === 'adjust' ? 'stock.adjust' : 'stock.receive', payload, dialog.mode === 'adjust' ? 'Ajuste de inventario registrado con trazabilidad.' : 'Ingreso de stock registrado.')} onCancel={close} />}
-      {dialog.mode === 'value' && <StockValueForm product={dialog.product} onSave={payload => complete('stock.value', payload, 'Costo de las existencias actualizado con su asiento contable.')} onCancel={close} />}
-      {dialog.mode === 'qr' && <Suspense fallback={<p role="status">Generando QR…</p>}><ProductQr product={dialog.product} /></Suspense>}
-      {dialog.mode === 'scan' && <><label className="checkbox-field"><input type="checkbox" checked={direct} onChange={event => setDirect(event.target.checked)} />Ingreso directo: sumar 1 unidad si el producto ya existe</label><Suspense fallback={<p role="status">Cargando lector…</p>}><QrScanner onScan={scan} onClose={close} /></Suspense></>}
-      {dialog.mode === 'migrate' && <MigrationForm products={legacyProducts} references={references} onSave={payload => complete('catalog.migrate', payload, 'Lote migrado. Los productos restantes pueden revisarse en otro lote.')} onCancel={close} />}
-      {dialog.mode === 'archive' && <><p>{dialog.product.active === false ? 'Reactivar' : 'Archivar'} la variante <strong>{dialog.product.sku}</strong> de {dialog.product.name}.</p><p>Los movimientos, ventas y documentos relacionados conservarán su historial.</p>{error && <p className="feedback is-error" role="alert">{error}</p>}<div className="modal-actions"><button className="secondary-button" disabled={working} onClick={close}>Cancelar</button><button className="primary-button" disabled={working} onClick={archive}>{working ? 'Guardando…' : dialog.product.active === false ? 'Reactivar variante' : 'Archivar variante'}</button></div></>}
+      {staleDialog ? <p className="feedback is-error">El producto ya no está disponible. Cierra esta ventana y actualiza el catálogo.</p> : <>
+        {admin && ['create', 'edit'].includes(dialog.mode) && <ProductForm product={dialog.mode === 'edit' ? dialogProduct : undefined} initialValues={dialog.initialValues} onSave={saveProduct} onCancel={close} role={role} referenceOptions={referenceOptions} lockedReference={dialog.mode === 'edit'} />}
+        {admin && dialog.mode === 'variants' && <VariantReferenceForm references={referenceOptions} initialReference={currentReference} role={role} onSave={payload => complete('catalog.create', payload, 'Referencia y variantes guardadas.')} onCancel={close} />}
+        {admin && dialog.mode === 'reference' && currentReference && <ReferenceForm reference={currentReference} onSave={payload => complete('catalog.reference', payload, 'Referencia actualizada en todas sus variantes.')} onCancel={close} />}
+        {intake && ['receive', 'adjust'].includes(dialog.mode) && dialogProduct && <StockMovementForm product={dialogProduct} adjustment={dialog.mode === 'adjust'} role={role} onSave={payload => complete(dialog.mode === 'adjust' ? 'stock.adjust' : 'stock.receive', payload, dialog.mode === 'adjust' ? 'Ajuste registrado con trazabilidad.' : 'Ingreso de stock registrado.')} onCancel={close} />}
+        {admin && dialog.mode === 'value' && dialogProduct && <StockValueForm product={dialogProduct} onSave={payload => complete('stock.value', payload, 'Costo actualizado con su asiento contable.')} onCancel={close} />}
+        {dialog.mode === 'qr' && dialogProduct && <Suspense fallback={<p role="status">Generando QR…</p>}><ProductQr product={dialogProduct} /></Suspense>}
+        {intake && dialog.mode === 'scan' && <><label className="checkbox-field"><input type="checkbox" checked={direct} onChange={event => setDirect(event.target.checked)} />Ingreso directo: sumar 1 unidad si el producto ya existe</label><Suspense fallback={<p role="status">Cargando lector…</p>}><QrScanner onScan={scan} onClose={close} /></Suspense></>}
+        {admin && dialog.mode === 'migrate' && <MigrationForm products={legacyProducts} references={references} onSave={payload => complete('catalog.migrate', payload, 'Lote migrado. Revisa los productos restantes en otro lote.')} onCancel={close} />}
+        {admin && lifecycle && dialogGroup && <CatalogLifecycleForm mode={dialog.mode} product={dialogProduct} group={dialogGroup} costs={data.costs || []} costsLoading={Boolean(data.privateLoading)} onSave={payload => complete(lifecycleAction[dialog.mode], payload, ['delete', 'deleteReference'].includes(dialog.mode) ? 'Enviado a la papelera. Se registró la baja de existencias y se conserva el historial.' : ['restore', 'restoreReference'].includes(dialog.mode) ? 'Datos restaurados. Las unidades dadas de baja no se recuperan automáticamente.' : 'Estado actualizado. El stock y el historial se conservan.')} onCancel={close} />}
+      </>}
     </Modal>}
   </div>
 }

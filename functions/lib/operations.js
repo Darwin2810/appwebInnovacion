@@ -48,7 +48,8 @@ const assertExists = (snap, label) => {
   return snap.data();
 };
 const assertActive = (item) => {
-  if (item.data.active !== true) fail('failed-precondition', `La variante ${item.data.sku} está archivada.`);
+  if (item.data.deleted === true || item.referenceData.deleted === true) fail('failed-precondition', `El producto ${item.data.sku} está eliminado. Recupéralo antes de operar.`);
+  if (item.data.active !== true || item.referenceData.active === false) fail('failed-precondition', `La variante o referencia ${item.data.sku} está archivada.`);
 };
 const ensureState = (doc, expected, label) => {
   const accepted = Array.isArray(expected) ? expected : [expected];
@@ -64,6 +65,7 @@ const addAccount = (map, account, value) => map.set(account, sumMoney([map.get(a
 const stableId = (prefix, ...parts) => `${prefix}_${createHash('sha256').update(parts.join('\u0000')).digest('hex')}`;
 
 async function loadParty(tx, ctx, payload, type) {
+  if (ctx.role === 'seller' && payload.contactId) fail('permission-denied', 'El vendedor debe indicar el nombre del cliente; el directorio privado lo administra el administrador.');
   if (!payload.contactId) return { id: '', name: text(type === 'customer' ? payload.customerName : payload.supplierName, type === 'customer' ? 'Cliente' : 'Proveedor', 150) };
   const id = key(payload.contactId, 'Contacto');
   const contact = assertExists(await tx.get(ref(ctx, 'contacts', id)), 'El contacto');
@@ -71,9 +73,51 @@ async function loadParty(tx, ctx, payload, type) {
   return { id, name: text(contact.name, 'Nombre del contacto', 150) };
 }
 
+async function activeSeller(tx, ctx, value) {
+  const uid = key(value, 'Vendedor');
+  const member = assertExists(await tx.get(ref(ctx, 'members', uid)), 'El vendedor');
+  if (member.active !== true || member.role !== 'seller') fail('failed-precondition', 'La venta debe asignarse a un vendedor activo.');
+  return uid;
+}
+
+function ownSale(ctx, sale) {
+  if (ctx.role === 'seller' && (sale.sellerUid || sale.createdBy) !== ctx.uid) fail('permission-denied', 'Solo puedes registrar pagos de tus propias ventas.');
+}
+
+function publishSale(tx, ctx, id, sale) {
+  // Firestore cannot hide individual fields of a document. The selling desk
+  // receives a separate, fully replaced projection, never the private ledger
+  // record or a spread of its line items.
+  const lines = sale.lines.map(line => ({
+    variantId: line.variantId,
+    referenceKey: line.referenceKey || '',
+    sku: line.sku || '', name: line.name || '',
+    size: line.size || '', color: line.color || '', lot: line.lot || '',
+    quantity: line.quantity, unitPriceCents: line.unitPriceCents, totalCents: line.totalCents,
+  }));
+  tx.set(ref(ctx, 'salesDesk', id), {
+    sellerUid: sale.sellerUid || sale.createdBy,
+    customerName: sale.customerName, lines,
+    totalCents: sale.totalCents, paidCents: sale.paidCents,
+    balanceCents: sale.balanceCents ?? sale.totalCents - sale.paidCents,
+    status: sale.status, notes: sale.notes || '',
+    createdAt: sale.createdAt, createdBy: sale.createdBy,
+    ...meta(ctx),
+  });
+}
+
+const presentSale = (result, role) => role === 'admin' ? result : {
+  id: result.id, totalCents: result.totalCents, paidCents: result.paidCents,
+};
+const presentSalePayment = (result, role) => role === 'admin' ? result : {
+  id: result.id, paymentId: result.paymentId, paidCents: result.paidCents,
+};
+
 async function createSale(tx, ctx, payload) {
   const customer = await loadParty(tx, ctx, payload, 'customer');
   const customerName = customer.name;
+  if (ctx.role === 'seller' && payload.sellerUid && payload.sellerUid !== ctx.uid) fail('permission-denied', 'No puedes crear una venta a nombre de otro vendedor.');
+  const sellerUid = ctx.role === 'seller' ? ctx.uid : payload.sellerUid ? await activeSeller(tx, ctx, payload.sellerUid) : ctx.uid;
   const lines = lineList(payload.lines);
   const items = await Promise.all(lines.map((line) => loadStockItem(tx, ctx, line.variantId)));
   const normalized = lines.map((line, index) => {
@@ -82,6 +126,7 @@ async function createSale(tx, ctx, payload) {
     if (item.data.kind !== 'finished') fail('invalid-argument', 'Las ventas requieren productos terminados.');
     if (item.data.stock < line.quantity) fail('failed-precondition', `Stock insuficiente para ${item.data.sku}.`);
     const unitPriceCents = money(line.unitPriceCents ?? item.data.priceCents, 'Precio de venta');
+    if (ctx.role === 'seller' && unitPriceCents !== item.data.priceCents) fail('permission-denied', 'El vendedor debe utilizar el precio de catálogo; los cambios de precio los autoriza el administrador.');
     return { ...snapshot(item), quantity: line.quantity, unitPriceCents, totalCents: mulCents(unitPriceCents, line.quantity), inventoryAccount: inventoryAccount(item) };
   });
   const totalCents = sumMoney(normalized.map((line) => line.totalCents));
@@ -99,7 +144,9 @@ async function createSale(tx, ctx, payload) {
     addAccount(inventoryCredits, line.inventoryAccount, result.valueCents);
   });
   const costCents = sumMoney(normalized.map((line) => line.costCents));
-  tx.create(saleRef, { customerName, customerId: customer.id, lines: normalized, totalCents, costCents, hasUnvaluedCost: normalized.some((line) => line.unvaluedQuantity > 0), paidCents, balanceCents: totalCents - paidCents, notes, status: 'posted', ...created(ctx) });
+  const sale = { sellerUid, customerName, customerId: customer.id, lines: normalized, totalCents, costCents, hasUnvaluedCost: normalized.some((line) => line.unvaluedQuantity > 0), paidCents, balanceCents: totalCents - paidCents, notes, status: 'posted', ...created(ctx) };
+  tx.create(saleRef, sale);
+  publishSale(tx, ctx, saleRef.id, sale);
   journal(tx, ctx, { sourceType: 'sale', sourceId: saleRef.id, note: `Venta: ${customerName}`, lines: [debit('1305', totalCents), credit('4135', totalCents)] });
   if (costCents) journal(tx, ctx, { sourceType: 'sale-cost', sourceId: saleRef.id, note: 'Costo de los productos vendidos', lines: [debit('6135', costCents), ...accountLines(inventoryCredits, credit)] });
   if (paidCents) {
@@ -112,12 +159,15 @@ async function createSale(tx, ctx, payload) {
 async function paySale(tx, ctx, payload) {
   const saleRef = ref(ctx, 'sales', key(payload.saleId, 'Venta'));
   const sale = assertExists(await tx.get(saleRef), 'La venta');
+  ownSale(ctx, sale);
   ensureState(sale, 'posted', 'La venta');
   const amountCents = positiveMoney(payload.amountCents, 'Pago');
   const paidCents = sumMoney([sale.paidCents, amountCents]);
   if (paidCents > sale.totalCents) fail('invalid-argument', 'El pago supera el saldo pendiente.');
   const paymentId = payment(tx, ctx, 'sale', saleRef.id, amountCents);
-  tx.update(saleRef, { paidCents, balanceCents: sale.totalCents - paidCents, ...meta(ctx) });
+  const update = { paidCents, balanceCents: sale.totalCents - paidCents, ...meta(ctx) };
+  tx.update(saleRef, update);
+  publishSale(tx, ctx, saleRef.id, { ...sale, ...update });
   journal(tx, ctx, { sourceType: 'sale-payment', sourceId: saleRef.id, note: 'Cobro de cuenta por cobrar', lines: [debit('1105', amountCents), credit('1305', amountCents)] });
   return { id: saleRef.id, paymentId, paidCents };
 }
@@ -139,8 +189,20 @@ async function voidSale(tx, ctx, payload) {
     payment(tx, ctx, 'sale-refund', saleRef.id, sale.paidCents, { direction: 'out' });
     journal(tx, ctx, { sourceType: 'sale-refund', sourceId: saleRef.id, note: 'Devolución de cobros al anular venta', lines: [debit('1305', sale.paidCents), credit('1105', sale.paidCents)] });
   }
-  tx.update(saleRef, { status: 'void', voidReason: reason, refundedCents: sale.paidCents, balanceCents: 0, voidedAt: ctx.now, voidedBy: ctx.uid, ...meta(ctx) });
+  const update = { status: 'void', voidReason: reason, refundedCents: sale.paidCents, balanceCents: 0, voidedAt: ctx.now, voidedBy: ctx.uid, ...meta(ctx) };
+  tx.update(saleRef, update);
+  publishSale(tx, ctx, saleRef.id, { ...sale, ...update });
   return { id: saleRef.id, refundedCents: sale.paidCents };
+}
+
+async function assignSale(tx, ctx, payload) {
+  const saleRef = ref(ctx, 'sales', key(payload.saleId, 'Venta'));
+  const sale = assertExists(await tx.get(saleRef), 'La venta');
+  const sellerUid = await activeSeller(tx, ctx, payload.sellerUid);
+  const update = { sellerUid, ...meta(ctx) };
+  tx.update(saleRef, update);
+  publishSale(tx, ctx, saleRef.id, { ...sale, ...update });
+  return { id: saleRef.id, sellerUid };
 }
 
 async function createPurchase(tx, ctx, payload) {
@@ -444,7 +506,7 @@ async function recordFinanceEntry(tx, ctx, payload) {
 async function saveMember(tx, ctx, payload) {
   const uid = key(payload.uid, 'UID');
   const memberRole = text(payload.role, 'Rol', 20);
-  if (!['admin', 'operator', 'viewer'].includes(memberRole)) fail('invalid-argument', 'El rol no es válido.');
+  if (!['admin', 'operator', 'seller', 'viewer'].includes(memberRole)) fail('invalid-argument', 'El rol no es válido.');
   const active = strictBoolean(payload.active, 'Activo');
   if (uid === ctx.uid && (!active || memberRole !== 'admin')) fail('failed-precondition', 'No puedes retirar tu propio acceso de administrador. Otro administrador debe realizar ese cambio.');
   const memberRef = ref(ctx, 'members', uid);
@@ -472,7 +534,9 @@ async function saveContact(tx, ctx, payload) {
 }
 
 export const handlers = {
-  'sales.create': command(createSale), 'sales.pay': command(paySale), 'sales.void': command(voidSale),
+  'sales.create': { roles: ['admin', 'seller'], run: createSale, present: presentSale },
+  'sales.pay': { roles: ['admin', 'seller'], run: paySale, present: presentSalePayment },
+  'sales.void': command(voidSale), 'sales.assign': command(assignSale),
   'purchases.create': command(createPurchase), 'purchases.pay': command(payPurchase), 'purchases.void': command(voidPurchase),
   'production.bom': command(saveBom), 'production.plan': command(planProduction),
   'production.start': command(startProduction), 'production.complete': command(completeProduction), 'production.cancel': command(cancelProduction),

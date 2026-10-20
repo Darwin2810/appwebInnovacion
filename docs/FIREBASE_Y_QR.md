@@ -1,4 +1,4 @@
-# Firebase, acceso, tiempo real y QR · versión2
+# Firebase, acceso, tiempo real y QR · versión 2.1
 
 Esta entrega usa React/Vite, Authentication, Firestore y **Functions**. Las lecturas son en tiempo real; las operaciones de negocio sólo se escriben en el backend. La versión anterior escribía desde el navegador: esas funciones se sustituyen por `src/lib/erpApi.js` y las reglas nuevas deniegan escrituras directas.
 
@@ -33,7 +33,7 @@ organizations/exlaider-jeans/members/UID_EXACTO
   role: "admin"      (tipo texto)
 ```
 
-No escribas `employee`: los roles válidos son `admin`, `operator` y `viewer`. El UID debe ser el mostrado al iniciar sesión en la aplicación, respetando mayúsculas. Conserva estos documentos si ya existen. El primer administrador se crea en Console porque el registro público nunca se concede permisos por sí solo. Después, **Usuarios** permite autorizar, cambiar rol o desactivar otras cuentas existentes en Authentication. No puedes quitar tu propio acceso de administrador desde esa sesión.
+No escribas `employee`: los roles válidos son `admin`, `operator`, `seller` y `viewer`, mostrados como Administrador, Operador, Vendedor y Usuario. El UID debe ser el mostrado al iniciar sesión en la aplicación, respetando mayúsculas. Conserva estos documentos si ya existen. El primer administrador se crea en Console porque el registro público nunca se concede permisos por sí solo. Después, **Usuarios** permite autorizar, cambiar rol o desactivar otras cuentas existentes en Authentication. No puedes quitar tu propio acceso de administrador desde esa sesión.
 
 Si se muestra acceso pendiente, verifica proyecto, empresa, UID y los dos campos. La membresía se escucha en tiempo real: activar/desactivar o cambiar rol actualiza la interfaz; los permisos también se vuelven a verificar dentro de cada operación del servidor.
 
@@ -61,7 +61,7 @@ Sustituye el ID si usas otro proyecto. Las reglas nuevas impiden escribir desde 
 
 ## Tiempo real y permisos
 
-`src/hooks/useOrgData.js` escucha referencias/variantes con `onSnapshot` y sólo abre listeners privados para `admin`. Al cambiar UID o rol descarta los datos de la sesión anterior y cancela sus escuchas. El operador no solicita costos, finanzas ni personal. El viewer consulta sólo productos terminados (filtro `kind == finished`). `src/hooks/useAuth.js` escucha la aprobación y revocación de la cuenta.
+`src/hooks/useOrgData.js` escucha referencias/variantes con `onSnapshot`. Los módulos privados son exclusivos de `admin`; el vendedor recibe únicamente su proyección de ventas `salesDesk` y el operador sus propios movimientos. Al cambiar UID o rol descarta los datos de la sesión anterior y cancela sus escuchas. El operador no solicita costos, finanzas ni personal. Vendedor y usuario consultan sólo productos terminados (filtro `kind == finished`). `src/hooks/useAuth.js` escucha la aprobación y revocación de la cuenta. Consulta la [matriz de permisos](PERMISOS_Y_CATALOGO.md).
 
 El cliente envía `{companyId,action,requestId,payload}` a la callable `erp`. El servidor obtiene el UID del token de Authentication, verifica membresía dentro de la transacción, valida datos y escribe el documento de negocio, stock/costos, movimientos, asientos y auditoría. La misma solicitud repetida devuelve el resultado anterior sin repetir stock o pagos; reutilizar el ID con datos diferentes se rechaza.
 
@@ -69,11 +69,11 @@ No se permiten escrituras de negocio desde el SDK del navegador, tampoco al admi
 
 ## Preparar QR antes de guardar
 
-1. En **Inventario → Añadir producto**, completa nombre, referencia, SKU, precio, stock inicial, talla, color, lote y demás campos.
+1. Como administrador, en **Inventario → Añadir producto**, completa nombre, referencia, SKU, precio, stock inicial, talla, color, lote y demás campos.
 2. Pulsa **Generar QR sin guardar**. Revisa el QR y descarga su PNG. No se crea ningún documento en Firestore.
 3. En otro dispositivo pulsa **Escanear QR**, permite cámara o usa **Leer imagen QR** con el PNG.
-4. Si el SKU no existe, se rellena el formulario. Revisa y pulsa **Guardar producto** para registrar realmente.
-5. Si ya existe, el QR abre ingreso de stock; la opción de ingreso directo suma una unidad. No sobrescribe el precio, nombre ni stock actual con una etiqueta antigua.
+4. Si el SKU no existe, el administrador revisa el formulario y pulsa **Guardar producto**. El operador recibe un aviso para solicitar su creación; no puede crear referencias ni variantes desde QR.
+5. Si ya existe, administrador y operador pueden abrir el ingreso de stock; la opción de ingreso directo suma una unidad. Los demás roles sólo consultan. No sobrescribe el precio, nombre ni stock actual con una etiqueta antigua.
 
 En **Varias tallas y colores** puedes preparar un QR por cada fila antes de guardar todas. Cada variante tiene SKU, talla/color/lote y stock propios. El nombre y la referencia son comunes. Los QR no contienen costos privados, roles, datos personales ni instrucciones de pago.
 
@@ -134,7 +134,7 @@ npm.cmd run test:browser
 npm.cmd run build
 ```
 
-Prueba además en el proyecto real: cuenta autorizada en dos dispositivos, crear variante móvil→PC, permisos operador/viewer, ingreso con QR, venta/pago/anulación y trazabilidad. Aquí no se han usado credenciales de producción ni se ha publicado automáticamente esta versión.
+Prueba además en el proyecto real: administrador en dos dispositivos, crear variante móvil→PC, los cuatro roles, ingreso QR del operador, venta/pago del vendedor y anulación administrativa. Comprueba archivo, papelera y trazabilidad con datos de prueba identificables. Aquí no se han usado credenciales de producción ni se ha publicado automáticamente esta versión.
 
 ## Problemas frecuentes
 

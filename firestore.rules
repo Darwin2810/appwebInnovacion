@@ -8,7 +8,7 @@ service cloud.firestore {
     function isMember(companyId) {
       return signedIn() && exists(memberPath(companyId))
         && get(memberPath(companyId)).data.active == true
-        && get(memberPath(companyId)).data.role in ['admin', 'operator', 'viewer'];
+        && get(memberPath(companyId)).data.role in ['admin', 'operator', 'seller', 'viewer'];
     }
     function isAdmin(companyId) {
       return isMember(companyId) && get(memberPath(companyId)).data.role == 'admin';
@@ -46,14 +46,20 @@ service cloud.firestore {
         allow write: if false;
       }
       match /movements/{movementId} {
-        allow read: if isStaff(companyId);
+        allow read: if isAdmin(companyId) || (isStaff(companyId) && resource.data.createdBy == request.auth.uid);
+        allow write: if false;
+      }
+      match /salesDesk/{saleId} {
+        allow read: if isAdmin(companyId) || (isMember(companyId)
+          && get(memberPath(companyId)).data.role == 'seller'
+          && resource.data.sellerUid == request.auth.uid);
         allow write: if false;
       }
       match /{privateCollection}/{documentId} {
         allow read: if privateCollection in [
           'costs', 'journals', 'commands', 'audit', 'sales', 'purchases',
           'payments', 'productionBoms', 'productionOrders', 'employees',
-          'attendance', 'payroll', 'financeEntries', 'contacts', 'migrations'
+          'attendance', 'payroll', 'financeEntries', 'contacts', 'migrations', 'deletions'
         ] && isAdmin(companyId);
         // All business mutations go through the authenticated ERP callable.
         allow write: if false;

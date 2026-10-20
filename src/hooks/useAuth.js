@@ -32,7 +32,7 @@ export function useAuth() {
       stopMember = onSnapshot(doc(firebaseState.db, 'organizations', firebaseState.companyId, 'members', user.uid), (snapshot) => {
         if (!live || currentUid !== user.uid) return
         const value = snapshot.exists() ? snapshot.data() : null
-        const member = value?.active === true && ['admin', 'operator', 'viewer'].includes(value.role) ? value : null
+        const member = value?.active === true && ['admin', 'operator', 'seller', 'viewer'].includes(value.role) ? value : null
         setState((current) => ({ ...current, member, membershipLoading: false, error: '' }))
       }, () => {
         if (!live || currentUid !== user.uid) return

@@ -60,7 +60,9 @@ npm.cmd run firebase -- deploy --project exlaider-inventario --only "firestore,h
 
 Usa tu cuenta administradora existente. En Inventario aparece una sección para los productos anteriores. Pulsa **Revisar y migrar inventario**, corrige las referencias y confirma con **Migrar productos seleccionados**, hasta 20 por operación. El backend conserva los documentos anteriores y los IDs usados por los QR; no borra stock ni duplica una migración ya confirmada. Los costos anteriores desconocidos quedan pendientes: registra el costo real con **Valorar existencias** o con compras nuevas, sin usar el precio de venta como costo.
 
-Autoriza cuentas creadas en Authentication desde **Usuarios** con su UID exacto y rol `admin`, `operator` o `viewer`. El primer administrador conserva su documento `organizations/exlaider-jeans/members/UID`, con `active` booleano `true` y `role` texto `admin`.
+Autoriza cuentas creadas en Authentication desde **Usuarios** con su UID exacto y rol `admin` (Administrador), `operator` (Operador), `seller` (Vendedor) o `viewer` (Usuario). El primer administrador conserva su documento `organizations/exlaider-jeans/members/UID`, con `active` booleano `true` y `role` texto `admin`.
+
+La versión 2.1 limita al operador al ingreso de stock y reserva la valoración total al administrador. El catálogo se agrupa por referencia: abre el producto para seleccionar color, talla y lote. Revisa [permisos, archivo y papelera](docs/PERMISOS_Y_CATALOGO.md) antes de eliminar artículos con existencias.
 
 ## 6. Computador y celular
 

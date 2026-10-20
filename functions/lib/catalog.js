@@ -4,6 +4,7 @@ import { fail, text, integer, money, key, codeKey, nameKey, ref, meta, created, 
 
 const MAX_LINES = 20
 const MAX_STOCK = 1_000_000_000
+const MAX_REFERENCE_VARIANTS = 100
 const INVENTORY_ACCOUNT = { material: '1405', finished: '1435' }
 
 function object(value, label) {
@@ -113,6 +114,19 @@ function acquisitionCost(ctx, value, quantity) {
   return mulCents(money(value, 'Costo unitario'), quantity)
 }
 
+function assertNotDeleted(data, label) {
+  if (data.deleted === true) fail('failed-precondition', `${label} está eliminada. Recupérala antes de modificarla.`)
+}
+
+function assertReferenceAvailable(data) {
+  assertNotDeleted(data, 'La referencia')
+  if (data.active === false) fail('failed-precondition', 'La referencia está archivada. Reactívala antes de añadir variantes o registrar movimientos.')
+}
+
+function restoration(ctx, reason) {
+  return { active: true, deleted: false, restoredAt: ctx.now, restoredBy: ctx.uid, restorationReason: reason, ...meta(ctx) }
+}
+
 /** Reads only. Call every loader before the first write in a transaction. */
 export async function loadStockItem(tx, ctx, variantId) {
   const id = key(variantId, 'Variante')
@@ -135,7 +149,12 @@ export function applyStockChange(tx, ctx, item, delta, options = {}) {
   if (!delta) fail('invalid-argument', 'La cantidad del movimiento debe ser distinta de cero.')
   const stockBefore = integer(item.data.stock, 'Stock actual', 0, MAX_STOCK)
   const stockAfter = integer(stockBefore + delta, 'Stock resultante', 0, MAX_STOCK)
-  if (item.data.active !== true && !options.reactivate) fail('failed-precondition', 'La variante está archivada. Reactívala antes de registrar movimientos.')
+  if ((options.reactivate || options.allowInactive) && ctx.role !== 'admin') fail('permission-denied', 'Solo el administrador puede recuperar existencias archivadas o eliminadas.')
+  if (!options.reactivate && !options.allowInactive) {
+    assertReferenceAvailable(item.referenceData)
+    assertNotDeleted(item.data, 'La variante')
+    if (item.data.active === false) fail('failed-precondition', 'La variante está archivada. Reactívala antes de registrar movimientos.')
+  }
   const currentValue = money(item.costData?.stockValueCents ?? 0, 'Valor registrado')
   const unknownBefore = integer(item.costData?.unvaluedQuantity ?? (stockBefore && !currentValue ? stockBefore : 0), 'Unidades sin valorar', 0, stockBefore)
   if (!stockBefore && currentValue) fail('failed-precondition', 'El costo registrado no coincide con el stock. Solicita una revisión contable.')
@@ -155,7 +174,17 @@ export function applyStockChange(tx, ctx, item, delta, options = {}) {
     unknownAfter = unknownBefore + (stockBefore ? Math.min(quantity, scaled(unknownBefore, quantity, stockBefore)) : quantity)
   }
   const stockValueCents = money(currentValue + (delta > 0 ? valueCents : -valueCents), 'Valor resultante')
-  const next = { stock: stockAfter, ...(options.reactivate ? { active: true } : {}), ...meta(ctx) }
+  const sourceType = text(options.sourceType, 'Origen del movimiento', 60)
+  const sourceId = text(options.sourceId, 'ID del origen', 128)
+  const reason = text(options.reason ?? 'Movimiento de inventario', 'Motivo', 500)
+  const recoverVariant = options.reactivate && (item.data.active === false || item.data.deleted === true)
+  const recoverReference = options.reactivate && (item.referenceData.active === false || item.referenceData.deleted === true)
+  const next = { stock: stockAfter, ...(recoverVariant ? restoration(ctx, reason) : {}), ...options.variantPatch, ...meta(ctx) }
+  if (recoverReference) {
+    const patch = restoration(ctx, reason)
+    tx.set(item.referenceRef, patch, { merge: true })
+    Object.assign(item.referenceData, patch)
+  }
   tx.set(item.ref, next, { merge: true })
   tx.set(item.costRef, { stockValueCents, unvaluedQuantity: unknownAfter, ...meta(ctx) }, { merge: true })
   const movementRef = ref(ctx, 'movements')
@@ -163,9 +192,7 @@ export function applyStockChange(tx, ctx, item, delta, options = {}) {
     variantId: item.ref.id, referenceKey: item.data.referenceKey,
     sku: item.data.sku, name: item.referenceData.name, delta,
     stockBefore, stockAfter,
-    sourceType: text(options.sourceType, 'Origen del movimiento', 60),
-    sourceId: text(options.sourceId, 'ID del origen', 128),
-    reason: text(options.reason ?? 'Movimiento de inventario', 'Motivo', 500),
+    sourceType, sourceId, reason,
     createdAt: ctx.now, createdBy: ctx.uid,
   })
   // Keep repeated changes to a previously loaded item coherent without reads
@@ -243,14 +270,17 @@ async function createCatalog(tx, ctx, payload) {
   const referenceRef = ref(ctx, 'references', incoming.id)
   const [reference, ...indices] = await readAll(tx, [referenceRef, ...skus.map(sku => indexRef(ctx, sku)), ...inputs.map(item => combinationRef(ctx, incoming.id, item.fields))])
   const legacy = await legacyReservations(tx, ctx, skus)
-  if (reference.exists) validateHeader(reference.data(), incoming.data)
+  if (reference.exists) {
+    validateHeader(reference.data(), incoming.data)
+    assertReferenceAvailable(reference.data())
+  }
   if (indices.some(snapshot => snapshot.exists)) fail('already-exists', 'El SKU o la combinación de talla, color y lote ya existe en el inventario.')
   if (legacy.size) fail('already-exists', `El SKU ${[...legacy.keys()][0]} pertenece a un producto anterior. Migra ese producto antes de añadir variantes.`)
   await assertLegacyReference(tx, ctx, incoming.data)
   const referenceData = reference.exists ? reference.data() : incoming.data
-  if (!reference.exists) tx.set(referenceRef, { ...incoming.data, ...created(ctx) })
+  if (!reference.exists) tx.set(referenceRef, { ...incoming.data, active: true, deleted: false, ...created(ctx) })
   for (const item of inputs) {
-    const data = { ...item.fields, skuAliases: [], referenceKey: incoming.id, kind: referenceData.kind, stock: 0, active: true, ...created(ctx) }
+    const data = { ...item.fields, skuAliases: [], referenceKey: incoming.id, kind: referenceData.kind, stock: 0, active: true, deleted: false, ...created(ctx) }
     const costRef = ref(ctx, 'costs', item.ref.id)
     tx.set(item.ref, data)
     tx.set(costRef, { stockValueCents: 0, unvaluedQuantity: 0, ...meta(ctx) })
@@ -269,6 +299,7 @@ async function editReference(tx, ctx, payload) {
   const referenceRef = ref(ctx, 'references', referenceId(payload.referenceKey))
   const snapshot = await tx.get(referenceRef)
   if (!snapshot.exists) fail('not-found', 'La referencia no existe.')
+  assertNotDeleted(snapshot.data(), 'La referencia')
   const name = text(payload.name, 'Nombre del producto', 100)
   await assertLegacyReference(tx, ctx, { ...snapshot.data(), name, nameKey: nameKey(name) })
   tx.update(referenceRef, {
@@ -284,6 +315,8 @@ async function editReference(tx, ctx, payload) {
 async function editVariant(tx, ctx, payload) {
   object(payload, 'La variante')
   const item = await loadStockItem(tx, ctx, payload.variantId)
+  assertNotDeleted(item.data, 'La variante')
+  assertNotDeleted(item.referenceData, 'La referencia')
   const fields = variantFields(payload)
   const newIndex = indexRef(ctx, fields.skuKey)
   const newCombination = combinationRef(ctx, item.data.referenceKey, fields)
@@ -307,7 +340,7 @@ async function editVariant(tx, ctx, payload) {
 function adjustmentJournal(tx, ctx, item, delta, valueCents, reason, sourceType) {
   if (!valueCents) return
   const positive = delta > 0
-  journal(tx, ctx, {
+  return journal(tx, ctx, {
     sourceType, sourceId: ctx.commandId, note: reason,
     lines: [
       { account: INVENTORY_ACCOUNT[item.data.kind], debitCents: positive ? valueCents : 0, creditCents: positive ? 0 : valueCents },
@@ -352,9 +385,135 @@ async function archiveVariant(tx, ctx, payload) {
   object(payload, 'La variante')
   const active = bool(payload.active, 'Estado activo')
   const item = await loadStockItem(tx, ctx, payload.variantId)
-  if (!active && item.data.stock !== 0) fail('failed-precondition', 'Solo se puede archivar una variante con stock cero. Registra primero el movimiento correspondiente.')
-  tx.update(item.ref, { active, ...meta(ctx) })
+  assertNotDeleted(item.data, 'La variante')
+  assertNotDeleted(item.referenceData, 'La referencia')
+  const reason = text(payload.reason ?? (active ? 'Reactivación de variante' : 'Archivo de variante'), 'Motivo', 500)
+  tx.update(item.ref, { active, stateReason: reason, stateChangedAt: ctx.now, stateChangedBy: ctx.uid, ...meta(ctx) })
   return { id: item.ref.id, active }
+}
+
+async function referenceState(tx, ctx, payload) {
+  object(payload, 'La referencia')
+  const referenceRef = ref(ctx, 'references', referenceId(payload.referenceKey))
+  const active = bool(payload.active, 'Estado activo')
+  const reason = text(payload.reason ?? (active ? 'Reactivación de referencia' : 'Archivo de referencia'), 'Motivo', 500)
+  const snapshot = await tx.get(referenceRef)
+  if (!snapshot.exists) fail('not-found', 'La referencia no existe.')
+  assertNotDeleted(snapshot.data(), 'La referencia')
+  tx.update(referenceRef, { active, stateReason: reason, stateChangedAt: ctx.now, stateChangedBy: ctx.uid, ...meta(ctx) })
+  return { id: referenceRef.id, active }
+}
+
+function deletionState(ctx, reason) {
+  return { active: false, deleted: true, deletedAt: ctx.now, deletedBy: ctx.uid, deletionReason: reason, ...meta(ctx) }
+}
+
+function deletionEntry(item) {
+  const stock = integer(item.data.stock, 'Stock actual', 0, MAX_STOCK)
+  const stockValueCents = money(item.costData.stockValueCents ?? 0, 'Valor registrado')
+  const unvaluedQuantity = integer(item.costData.unvaluedQuantity ?? (stock && !stockValueCents ? stock : 0), 'Unidades sin valorar', 0, stock)
+  if (!stock && stockValueCents) fail('failed-precondition', 'El costo registrado no coincide con el stock. Revisa la valoración antes de eliminar.')
+  return { variantId: item.ref.id, referenceKey: item.data.referenceKey, sku: item.data.sku, name: item.referenceData.name, kind: item.data.kind, stock, stockValueCents, unvaluedQuantity }
+}
+
+function writeDeletion(tx, ctx, items, reason, referenceKey, scope) {
+  // One private snapshot per command keeps a 100-variant reference deletion
+  // below Firestore's 500-write limit, including command and audit records.
+  const entries = items.map(deletionEntry)
+  const deletionRef = ref(ctx, 'deletions')
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
+    const entry = entries[index]
+    const patch = deletionState(ctx, reason)
+    if (entry.stock) {
+      const result = applyStockChange(tx, ctx, item, -entry.stock, {
+        sourceType: 'catalog_delete', sourceId: ctx.commandId, reason,
+        allowInactive: true, variantPatch: patch,
+      })
+      entry.movementId = result.movementId
+      const journalId = adjustmentJournal(tx, ctx, item, -entry.stock, result.valueCents, `Baja de ${item.data.sku}: ${reason}`, 'catalog_delete')
+      if (journalId) entry.journalId = journalId
+    } else {
+      tx.update(item.ref, patch)
+      // Normalize a missing legacy cost document without inventing inventory.
+      tx.set(item.costRef, { stockValueCents: 0, unvaluedQuantity: 0, ...meta(ctx) }, { merge: true })
+    }
+  }
+  tx.create(deletionRef, { commandId: ctx.commandId, scope, referenceKey, reason, entries, ...created(ctx) })
+  return { deletionId: deletionRef.id, writeOffQuantity: entries.reduce((sum, entry) => sum + entry.stock, 0) }
+}
+
+async function deleteVariant(tx, ctx, payload) {
+  object(payload, 'La eliminación')
+  const reason = text(payload.reason, 'Motivo de la eliminación', 500)
+  const confirmSku = text(payload.confirmSku, 'SKU de confirmación', 40)
+  const item = await loadStockItem(tx, ctx, payload.variantId)
+  assertNotDeleted(item.data, 'La variante')
+  if (confirmSku !== item.data.sku) fail('failed-precondition', 'Escribe exactamente el SKU de la variante para confirmar su eliminación y la baja de existencias.')
+  const result = writeDeletion(tx, ctx, [item], reason, item.data.referenceKey, 'variant')
+  return { id: item.ref.id, deleted: true, ...result }
+}
+
+async function loadReferenceItems(tx, ctx, referenceKey, deleted) {
+  const referenceRef = ref(ctx, 'references', referenceId(referenceKey))
+  const reference = await tx.get(referenceRef)
+  if (!reference.exists) fail('not-found', 'La referencia no existe.')
+  const referenceData = reference.data()
+  const source = ctx.org.collection('variants').where('referenceKey', '==', referenceKey).orderBy(FieldPath.documentId()).limit(200)
+  const variants = []
+  let cursor
+  while (true) {
+    const page = await tx.get(cursor ? source.startAfter(cursor) : source)
+    variants.push(...page.docs.filter(snapshot => (snapshot.data().deleted === true) === deleted))
+    if (variants.length > MAX_REFERENCE_VARIANTS) fail('failed-precondition', `La operación admite hasta ${MAX_REFERENCE_VARIANTS} variantes. ${deleted ? 'Recupera' : 'Elimina'} primero variantes individualmente y vuelve a intentarlo.`)
+    if (page.size < 200) break
+    cursor = page.docs.at(-1)
+  }
+  const costs = await readAll(tx, variants.map(snapshot => ref(ctx, 'costs', snapshot.id)))
+  const items = variants.map((snapshot, index) => {
+    const data = snapshot.data()
+    if (data.kind !== referenceData.kind) fail('failed-precondition', 'El tipo de una variante no coincide con su referencia. Revisa el catálogo antes de continuar.')
+    return { ref: snapshot.ref, data, costRef: ref(ctx, 'costs', snapshot.id), costData: costs[index].exists ? costs[index].data() : { stockValueCents: 0, unvaluedQuantity: data.stock }, referenceRef, referenceData }
+  })
+  return { referenceRef, referenceData, items }
+}
+
+async function deleteReference(tx, ctx, payload) {
+  object(payload, 'La eliminación de referencia')
+  const reason = text(payload.reason, 'Motivo de la eliminación', 500)
+  const confirmReference = text(payload.confirmReference, 'Referencia de confirmación', 60)
+  const loaded = await loadReferenceItems(tx, ctx, payload.referenceKey, false)
+  assertNotDeleted(loaded.referenceData, 'La referencia')
+  if (confirmReference !== loaded.referenceData.code) fail('failed-precondition', 'Escribe exactamente la referencia para confirmar su eliminación y la baja de todas sus existencias.')
+  const result = writeDeletion(tx, ctx, loaded.items, reason, loaded.referenceRef.id, 'reference')
+  tx.update(loaded.referenceRef, deletionState(ctx, reason))
+  return { id: loaded.referenceRef.id, deleted: true, variantIds: loaded.items.map(item => item.ref.id), ...result }
+}
+
+function assertRestorable(item) {
+  if (integer(item.data.stock, 'Stock actual', 0, MAX_STOCK) !== 0 || money(item.costData.stockValueCents ?? 0, 'Valor registrado') !== 0) fail('failed-precondition', 'Una variante eliminada conserva existencias o valor. Revisa su historial antes de recuperarla.')
+}
+
+async function restoreVariant(tx, ctx, payload) {
+  object(payload, 'La recuperación')
+  const reason = text(payload.reason, 'Motivo de la recuperación', 500)
+  const item = await loadStockItem(tx, ctx, payload.variantId)
+  if (item.data.deleted !== true) fail('failed-precondition', 'La variante no está eliminada. Usa la opción de reactivación para una variante archivada.')
+  assertRestorable(item)
+  tx.update(item.ref, restoration(ctx, reason))
+  if (item.referenceData.deleted === true) tx.update(item.referenceRef, restoration(ctx, reason))
+  return { id: item.ref.id, deleted: false, stock: 0 }
+}
+
+async function restoreReference(tx, ctx, payload) {
+  object(payload, 'La recuperación de referencia')
+  const reason = text(payload.reason, 'Motivo de la recuperación', 500)
+  const loaded = await loadReferenceItems(tx, ctx, payload.referenceKey, true)
+  if (loaded.referenceData.deleted !== true && !loaded.items.length) fail('failed-precondition', 'La referencia no contiene variantes eliminadas. Reactívala si está archivada.')
+  loaded.items.forEach(assertRestorable)
+  for (const item of loaded.items) tx.update(item.ref, restoration(ctx, reason))
+  tx.update(loaded.referenceRef, restoration(ctx, reason))
+  return { id: loaded.referenceRef.id, deleted: false, variantIds: loaded.items.map(item => item.ref.id) }
 }
 
 async function valueStock(tx, ctx, payload) {
@@ -362,6 +521,8 @@ async function valueStock(tx, ctx, payload) {
   const unitCostCents = money(payload.unitCostCents, 'Costo unitario')
   const reason = text(payload.reason, 'Motivo de la valoración', 500)
   const item = await loadStockItem(tx, ctx, payload.variantId)
+  assertNotDeleted(item.data, 'La variante')
+  assertNotDeleted(item.referenceData, 'La referencia')
   if (item.data.stock < 1) fail('failed-precondition', 'La variante no tiene existencias para valorar.')
   const stockValueCents = mulCents(unitCostCents, item.data.stock)
   const previousValue = money(item.costData.stockValueCents ?? 0, 'Valor anterior')
@@ -438,6 +599,7 @@ async function migrateLegacy(tx, ctx, payload) {
     const snapshot = headerSnapshots[index]
     if (snapshot.exists) {
       validateHeader(snapshot.data(), headers.get(headerIds[index]))
+      assertReferenceAvailable(snapshot.data())
       headers.set(headerIds[index], snapshot.data())
     }
   }
@@ -445,14 +607,14 @@ async function migrateLegacy(tx, ctx, payload) {
   const migratingIds = new Set(prepared.map(item => item.legacyId))
   await assertLegacyReference(tx, ctx, [...headers.values()], migratingIds)
   for (let index = 0; index < headerIds.length; index++) {
-    if (!headerSnapshots[index].exists) tx.set(ref(ctx, 'references', headerIds[index]), { ...headers.get(headerIds[index]), ...created(ctx) })
+    if (!headerSnapshots[index].exists) tx.set(ref(ctx, 'references', headerIds[index]), { ...headers.get(headerIds[index]), active: true, deleted: false, ...created(ctx) })
   }
   for (const item of prepared) {
     const variantRef = ref(ctx, 'variants', item.legacyId)
     const costRef = ref(ctx, 'costs', item.legacyId)
     const referenceRef = ref(ctx, 'references', item.incoming.id)
     const referenceData = headers.get(item.incoming.id)
-    const data = { ...item.fields, skuAliases: [], referenceKey: item.incoming.id, kind: referenceData.kind, stock: 0, active: true, legacyId: item.legacyId, ...created(ctx) }
+    const data = { ...item.fields, skuAliases: [], referenceKey: item.incoming.id, kind: referenceData.kind, stock: 0, active: true, deleted: false, legacyId: item.legacyId, ...created(ctx) }
     tx.set(variantRef, data)
     tx.set(costRef, { stockValueCents: 0, unvaluedQuantity: 0, ...meta(ctx) })
     tx.set(indexRef(ctx, item.fields.skuKey), { variantId: item.legacyId, ...created(ctx) })
@@ -464,12 +626,17 @@ async function migrateLegacy(tx, ctx, payload) {
 }
 
 export const handlers = {
-  'catalog.create': { roles: ['admin', 'operator'], run: createCatalog },
-  'catalog.reference': { roles: ['admin', 'operator'], run: editReference },
-  'catalog.variant': { roles: ['admin', 'operator'], run: editVariant },
+  'catalog.create': { roles: ['admin'], run: createCatalog },
+  'catalog.reference': { roles: ['admin'], run: editReference },
+  'catalog.variant': { roles: ['admin'], run: editVariant },
   'stock.receive': { roles: ['admin', 'operator'], run: receiveStock },
   'stock.adjust': { roles: ['admin'], run: adjustStock },
   'stock.value': { roles: ['admin'], run: valueStock },
   'catalog.archive': { roles: ['admin'], run: archiveVariant },
+  'catalog.referenceState': { roles: ['admin'], run: referenceState },
+  'catalog.delete': { roles: ['admin'], run: deleteVariant },
+  'catalog.deleteReference': { roles: ['admin'], run: deleteReference },
+  'catalog.restore': { roles: ['admin'], run: restoreVariant },
+  'catalog.restoreReference': { roles: ['admin'], run: restoreReference },
   'catalog.migrate': { roles: ['admin'], run: migrateLegacy },
 }

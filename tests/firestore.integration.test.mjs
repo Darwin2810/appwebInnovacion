@@ -30,7 +30,7 @@ setLogLevel('silent')
 const privateCollections = [
   'costs', 'journals', 'commands', 'audit', 'sales', 'purchases',
   'payments', 'productionBoms', 'productionOrders', 'employees',
-  'attendance', 'payroll', 'financeEntries', 'contacts', 'migrations',
+  'attendance', 'payroll', 'financeEntries', 'contacts', 'migrations', 'deletions',
 ]
 
 describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de escritura', {
@@ -53,7 +53,7 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
         rules: await readFile(new URL('../firestore.rules', import.meta.url), 'utf8'),
       },
     })
-    for (const uid of ['admin', 'operator', 'viewer', 'inactive', 'outsider', 'pending', 'invalid-role']) {
+    for (const uid of ['admin', 'operator', 'seller', 'seller-other', 'viewer', 'inactive', 'outsider', 'pending', 'invalid-role']) {
       clients[uid] = environment.authenticatedContext(uid).firestore()
     }
     clients.anonymous = environment.unauthenticatedContext().firestore()
@@ -65,9 +65,10 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
       const db = context.firestore()
       const batch = writeBatch(db)
       batch.set(doc(db, `organizations/${company}`), { name: 'EXLAIDER JEANS SAS' })
-      for (const role of ['admin', 'operator', 'viewer']) {
+      for (const role of ['admin', 'operator', 'seller', 'viewer']) {
         batch.set(doc(db, path('members', role)), { role, active: true })
       }
+      batch.set(doc(db, path('members', 'seller-other')), { role: 'seller', active: true })
       batch.set(doc(db, path('members', 'inactive')), { role: 'operator', active: false })
       batch.set(doc(db, path('members', 'invalid-role')), { role: 'employee', active: true })
       batch.set(doc(db, `organizations/another-${company}/members/outsider`), { role: 'admin', active: true })
@@ -76,37 +77,46 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
         batch.set(doc(db, path(name, 'material')), { kind: 'material', name: 'Tela', stock: 100 })
       }
       for (const name of [...privateCollections, 'movements', 'products', 'variantSkuIndex', 'skuIndex']) {
-        batch.set(doc(db, path(name)), { fixture: true, ...(name === 'costs' ? { stockValueCents: 100000 } : {}) })
+        batch.set(doc(db, path(name)), { fixture: true, ...(name === 'costs' ? { stockValueCents: 100000 } : {}), ...(name === 'movements' ? { createdBy: 'operator' } : {}) })
       }
+      batch.set(doc(db, path('movements', 'admin-own')), { createdBy: 'admin', delta: 1 })
+      batch.set(doc(db, path('salesDesk', 'seller-own')), { sellerUid: 'seller', totalCents: 2500, paidCents: 0 })
+      batch.set(doc(db, path('salesDesk', 'seller-other')), { sellerUid: 'seller-other', totalCents: 5000, paidCents: 0 })
       await batch.commit()
     })
   })
 
   after(async () => { await environment?.cleanup() })
 
-  test('admin y operador leen catálogo; viewer sólo productos terminados y consultas filtradas', async () => {
+  test('admin y operador leen catálogo; vendedor y usuario sólo productos terminados con consultas filtradas', async () => {
     for (const name of ['references', 'variants']) {
       const collectionPath = `organizations/${company}/${name}`
       for (const role of ['admin', 'operator']) {
         assert.equal((await assertSucceeds(getDocs(collection(dbFor(role), collectionPath)))).size, 2)
         await assertSucceeds(getDoc(doc(dbFor(role), path(name, 'material'))))
       }
-      await assertSucceeds(getDoc(doc(dbFor('viewer'), path(name, 'finished'))))
-      await assertFails(getDoc(doc(dbFor('viewer'), path(name, 'material'))))
-      await assertFails(getDocs(collection(dbFor('viewer'), collectionPath)))
-      const finished = query(collection(dbFor('viewer'), collectionPath), where('kind', '==', 'finished'))
-      assert.equal((await assertSucceeds(getDocs(finished))).size, 1)
+      for (const role of ['seller', 'viewer']) {
+        await assertSucceeds(getDoc(doc(dbFor(role), path(name, 'finished'))))
+        await assertFails(getDoc(doc(dbFor(role), path(name, 'material'))))
+        await assertFails(getDocs(collection(dbFor(role), collectionPath)))
+        const finished = query(collection(dbFor(role), collectionPath), where('kind', '==', 'finished'))
+        assert.equal((await assertSucceeds(getDocs(finished))).size, 1)
+      }
     }
     await assertSucceeds(getDocs(collection(dbFor('viewer'), `organizations/${company}/products`)))
-    await assertSucceeds(getDocs(collection(dbFor('operator'), `organizations/${company}/movements`)))
-    await assertFails(getDocs(collection(dbFor('viewer'), `organizations/${company}/movements`)))
+    const movements = collection(dbFor('operator'), `organizations/${company}/movements`)
+    await assertFails(getDocs(movements))
+    assert.equal((await assertSucceeds(getDocs(query(movements, where('createdBy', '==', 'operator'))))).size, 1)
+    await assertSucceeds(getDoc(doc(dbFor('operator'), path('movements'))))
+    await assertFails(getDoc(doc(dbFor('operator'), path('movements', 'admin-own'))))
+    for (const role of ['seller', 'viewer']) await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/movements`)))
   })
 
   test('costos, finanzas, ventas, producción y personal sólo los puede consultar el administrador', async () => {
     for (const name of privateCollections) {
       await assertSucceeds(getDoc(doc(dbFor('admin'), path(name))))
       await assertSucceeds(getDocs(collection(dbFor('admin'), `organizations/${company}/${name}`)))
-      for (const role of ['operator', 'viewer']) {
+      for (const role of ['operator', 'seller', 'viewer']) {
         await assertFails(getDoc(doc(dbFor(role), path(name))))
         await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/${name}`)))
       }
@@ -114,13 +124,31 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
     for (const name of ['skuIndex', 'variantSkuIndex', 'variantCombinationIndex', 'employeeDocumentIndex', 'payrollPeriodIndex']) {
       await assertFails(getDoc(doc(dbFor('admin'), path(name))))
     }
-    for (const role of ['operator', 'viewer']) await assertFails(getDocs(collectionGroup(dbFor(role), 'costs')))
+    for (const role of ['operator', 'seller', 'viewer']) await assertFails(getDocs(collectionGroup(dbFor(role), 'costs')))
+  })
+
+  test('vendedor consulta únicamente su proyección de ventas; la consulta debe filtrar propietario', async () => {
+    const sellerDb = dbFor('seller')
+    const desk = collection(sellerDb, `organizations/${company}/salesDesk`)
+    await assertSucceeds(getDoc(doc(sellerDb, path('salesDesk', 'seller-own'))))
+    await assertFails(getDoc(doc(sellerDb, path('salesDesk', 'seller-other'))))
+    await assertFails(getDocs(desk))
+    await assertFails(getDocs(query(desk, where('sellerUid', '==', 'seller-other'))))
+    assert.equal((await assertSucceeds(getDocs(query(desk, where('sellerUid', '==', 'seller'))))).size, 1)
+    assert.equal((await assertSucceeds(getDocs(collection(dbFor('admin'), `organizations/${company}/salesDesk`)))).size, 2)
+    for (const role of ['operator', 'viewer']) {
+      await assertFails(getDoc(doc(dbFor(role), path('salesDesk', 'seller-own'))))
+      await assertFails(getDocs(query(collection(dbFor(role), `organizations/${company}/salesDesk`), where('sellerUid', '==', role))))
+    }
+    await assertFails(getDocs(collectionGroup(sellerDb, 'salesDesk')))
+    await environment.withSecurityRulesDisabled((context) => updateDoc(doc(context.firestore(), path('salesDesk', 'seller-own')), { sellerUid: 'seller-other' }))
+    await assertFails(getDocFromServer(doc(sellerDb, path('salesDesk', 'seller-own'))))
   })
 
   test('nadie escribe directamente, ni siquiera admin: conserva trazabilidad y operaciones atómicas', async () => {
-    for (const role of ['admin', 'operator', 'viewer']) {
-      for (const name of ['members', 'references', 'variants', 'products', 'costs', 'movements', 'journals', 'audit', 'sales', 'variantSkuIndex']) {
-        const existing = name === 'members' ? role : name === 'variants' || name === 'references' ? 'finished' : 'fixture'
+    for (const role of ['admin', 'operator', 'seller', 'viewer']) {
+      for (const name of ['members', 'references', 'variants', 'products', 'costs', 'movements', 'journals', 'audit', 'sales', 'salesDesk', 'deletions', 'variantSkuIndex']) {
+        const existing = name === 'members' ? role : name === 'salesDesk' ? 'seller-own' : name === 'variants' || name === 'references' ? 'finished' : 'fixture'
         await assertFails(setDoc(doc(dbFor(role), path(name, 'injected')), { role: 'admin', active: true }))
         await assertFails(updateDoc(doc(dbFor(role), path(name, existing)), { injected: true }))
         await assertFails(deleteDoc(doc(dbFor(role), path(name, existing))))
@@ -130,12 +158,15 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
 
   test('sesión, membresía activa y empresa coincidente son obligatorias', async () => {
     for (const role of ['anonymous', 'outsider', 'inactive', 'pending', 'invalid-role']) {
-      for (const name of ['variants', 'references', 'products', 'costs', 'movements']) {
+      for (const name of ['variants', 'references', 'products', 'costs', 'movements', 'salesDesk', 'deletions']) {
         await assertFails(getDoc(doc(dbFor(role), path(name, name === 'variants' || name === 'references' ? 'finished' : 'fixture'))))
         await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/${name}`)))
       }
     }
-    await assertFails(getDocs(collection(dbFor('admin'), `organizations/another-${company}/variants`)))
+    for (const role of ['admin', 'operator', 'seller', 'viewer']) {
+      await assertFails(getDocs(collection(dbFor(role), `organizations/another-${company}/variants`)))
+      await assertFails(getDoc(doc(dbFor(role), `organizations/another-${company}/salesDesk/seller-own`)))
+    }
   })
 
   test('usuario pendiente lee su estado; sólo admin lista miembros y ve otros usuarios', async () => {
@@ -144,7 +175,7 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
     await assertSucceeds(getDoc(doc(dbFor('operator'), path('members', 'operator'))))
     await assertSucceeds(getDoc(doc(dbFor('admin'), path('members', 'operator'))))
     await assertSucceeds(getDocs(collection(dbFor('admin'), `organizations/${company}/members`)))
-    for (const role of ['operator', 'viewer', 'pending']) {
+    for (const role of ['operator', 'seller', 'viewer', 'pending']) {
       await assertFails(getDoc(doc(dbFor(role), path('members', 'admin'))))
       await assertFails(getDocs(collection(dbFor(role), `organizations/${company}/members`)))
     }
@@ -159,7 +190,8 @@ describe('Firestore ERP: aislamiento y permisos de lectura; backend exclusivo de
     await assertFails(getDocFromServer(doc(adminDb, path('sales'))))
     await assertFails(getDocs(collection(adminDb, `organizations/${company}/members`)))
     await assertSucceeds(getDocFromServer(doc(adminDb, path('variants', 'finished'))))
-    await assertSucceeds(getDocFromServer(doc(adminDb, path('movements'))))
+    await assertSucceeds(getDocFromServer(doc(adminDb, path('movements', 'admin-own'))))
+    await assertFails(getDocFromServer(doc(adminDb, path('movements'))))
   })
 
   test('onSnapshot transmite a ambos dispositivos cambios autorizados realizados por el backend', async () => {
