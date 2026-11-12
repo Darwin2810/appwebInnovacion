@@ -21,6 +21,7 @@ export function parseCatalogSheets(sheets = []) {
     const row = item.values
     const reference = clean(row.ref), name = clean(row.prenda), color = clean(row.color), size = clean(row.talla)
     const stock = integer(row['prototipo conteo'])
+    const importedPrice = row['precio venta cop'] == null || clean(row['precio venta cop']) === '' ? '' : Number(row['precio venta cop'])
     if (!reference && !name) continue
     if (!reference || !name) { errors.push(`Fila ${item.row}: faltan referencia o prenda.`); continue }
     if (stock === null) { errors.push(`Fila ${item.row}: «Prototipo conteo» debe ser un entero mayor o igual a cero.`); continue }
@@ -30,7 +31,8 @@ export function parseCatalogSheets(sheets = []) {
     if (key(group.reference.name) !== key(name)) { errors.push(`Fila ${item.row}: la referencia ${reference} ya está asociada a «${group.reference.name}» y no puede usarse para «${name}».`); continue }
     const duplicate = group.variants.some(variant => key(variant.size) === key(size) && key(variant.color) === key(color) && !variant.lot)
     if (duplicate) { errors.push(`Fila ${item.row}: se repite ${reference}, talla ${size || 'única'}, color ${color || 'sin color'}.`); continue }
-    group.variants.push({ size, color, lot: '', stock, price: '', minStock: '5', sourceRow: item.row })
+    if (importedPrice !== '' && (!Number.isFinite(importedPrice) || importedPrice <= 0 || importedPrice > 1e12)) { errors.push(`Fila ${item.row}: «Precio venta COP» debe ser mayor que cero.`); continue }
+    group.variants.push({ size, color, lot: '', stock, price: importedPrice === '' ? '' : String(importedPrice), minStock: '5', sourceRow: item.row })
     group.sourceRows.push(item.row)
   }
   if (!groups.size) throw new Error(errors[0] || 'No se encontraron productos válidos para importar.')

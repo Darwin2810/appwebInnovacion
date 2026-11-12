@@ -5,7 +5,7 @@ La importación está disponible únicamente para cuentas con rol **Administrado
 1. Entra a **Inventario** y pulsa **Importar Excel**.
 2. Selecciona `DATOS DE CAMPO INNOVACION EMPRESARIAL EXLAIDER.xlsx`.
 3. Comprueba el resumen. Con el archivo de campo validado deben aparecer **10 referencias, 16 variantes y 656 unidades**.
-4. Asigna el precio de venta. Puedes aplicarlo a todas las variantes y corregir después cada fila.
+4. Revisa los precios tomados de la columna `Precio venta COP`. Puedes aplicar otro valor a todas las variantes o corregir cada fila.
 5. Revisa el stock mínimo de cada variante.
 6. Marca la confirmación y pulsa **Importar 16 variantes**.
 

@@ -23,3 +23,10 @@ test('rechaza una referencia con nombres diferentes y exige precios antes de imp
   assert.match(result.errors[0], /no puede usarse/)
   assert.match(validateImport(result.groups)[0], /precio mayor que cero/)
 })
+
+test('carga automáticamente la columna Precio venta COP sin exponer códigos técnicos', () => {
+  const data = [headers.concat('Precio venta COP'), ['Jeans', '1005', 'Jean Recto Clásico', 'Azul Índigo', 30, 46, 0, 30, 46, 0, 'Cuadra', 145000]]
+  const result = parseCatalogSheets([{ sheet: 'Inventario Prendas', data }])
+  assert.equal(result.groups[0].variants[0].price, '145000')
+  assert.deepEqual(validateImport(result.groups), [])
+})
