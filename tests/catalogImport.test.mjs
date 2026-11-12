@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseCatalogSheets, validateImport } from '../src/lib/catalogImport.js'
+import { parseCatalogSheets, pendingImportGroups, validateImport } from '../src/lib/catalogImport.js'
 
 const headers = ['Colección', 'Ref', 'Prenda', 'Color', 'Talla', 'Cantidad que ingresó', 'Cantidad que salió a la venta', 'Conteo por papel', 'Prototipo conteo', 'Diferencia (papel vs. prototipo)', 'Estado']
 
@@ -46,4 +46,14 @@ test('agrupa insumos repetidos y convierte metros de hilo a centímetros', () =>
   assert.equal(thread.variants[0].stock, 5000)
   assert.equal(thread.variants[0].unitCost, '10')
   assert.deepEqual(validateImport(result.groups), [])
+})
+
+test('omite variantes existentes y conserva únicamente los insumos pendientes', () => {
+  const groups = [
+    { reference: { code: '1005', name: 'Jean', kind: 'finished' }, variants: [{ size: '30', color: 'Azul', lot: '', sourceRow: 2 }] },
+    { reference: { code: 'IN-BOT-01', name: 'Botón', kind: 'material' }, variants: [{ size: '', color: '', lot: 'Carga inicial de campo', sourceRow: 4 }] },
+  ]
+  const existing = [{ reference: '1005', name: 'Jean', size: '30', color: 'Azul', lot: '' }]
+  const pending = pendingImportGroups(groups, existing)
+  assert.deepEqual(pending.map(group => group.reference.code), ['IN-BOT-01'])
 })

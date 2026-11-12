@@ -85,8 +85,19 @@ export function validateImport(groups, existingProducts = []) {
       if (!Number.isFinite(price) || price < 0 || (group.reference.kind !== 'material' && price === 0)) errors.push(`${group.reference.code}, talla ${variant.size || 'única'}, color ${variant.color || 'sin color'}: ingresa un precio válido${group.reference.kind === 'material' ? '' : ' mayor que cero'}.`)
       if (variant.unitCost != null && variant.unitCost !== '' && (!Number.isFinite(Number(variant.unitCost)) || Number(variant.unitCost) < 0)) errors.push(`${group.reference.code}: el costo unitario debe ser mayor o igual a cero.`)
       if (!Number.isSafeInteger(Number(variant.minStock)) || Number(variant.minStock) < 0) errors.push(`${group.reference.code}: el stock mínimo debe ser un entero mayor o igual a cero.`)
-      if (existingProducts.some(item => key(item.reference) === key(group.reference.code) && key(item.size) === key(variant.size) && key(item.color) === key(variant.color) && key(item.lot) === key(variant.lot))) errors.push(`${group.reference.code}, talla ${variant.size || 'única'}, color ${variant.color || 'sin color'} ya existe.`)
     }
   }
   return [...new Set(errors)]
+}
+
+export function pendingImportGroups(groups, existingProducts = []) {
+  return groups.flatMap(group => {
+    const variants = group.variants.filter(variant => !existingProducts.some(item =>
+      key(item.reference) === key(group.reference.code) &&
+      key(item.size) === key(variant.size) &&
+      key(item.color) === key(variant.color) &&
+      key(item.lot) === key(variant.lot)
+    ))
+    return variants.length ? [{ ...group, variants }] : []
+  })
 }
