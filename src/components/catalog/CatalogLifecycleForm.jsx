@@ -9,7 +9,7 @@ export default function CatalogLifecycleForm({ mode, product, group, costs, cost
   const stateSignature = JSON.stringify(reference ? { active: liveActive, deleted: group.header?.deleted === true, code: group.code } : { active: liveActive, deleted: product?.deleted === true, parentActive: product?.parentActive, parentDeleted: product?.parentDeleted, sku: product?.sku })
   const [initialState] = useState(() => ({ signature: stateSignature, active: liveActive }))
   const active = initialState.active, stateChanged = initialState.signature !== stateSignature
-  const label = reference ? 'referencia' : 'variante', code = group.code
+  const label = reference ? 'referencia' : 'variante', code = reference ? group.code : product.reference
   const affected = reference ? group.products.filter(item => !item.deleted) : [product]
   const { quantity, valueCents, unvaluedQuantity } = catalogWriteOffPreview(affected, costs)
   const verb = deleting ? 'Eliminar' : restoring ? 'Restaurar' : active ? 'Archivar' : 'Reactivar'

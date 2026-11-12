@@ -16,6 +16,18 @@ test('one canonical reference groups sizes and colors, preserving physical lots 
   assert.equal(findCatalogCombination(products, { color: 'Verde', size: '38', lot: '2' }).sku, 'SKU2')
 })
 
+test('same product name across references becomes one family with color-specific sizes and images', () => {
+  const gray = { ...reference, id: 'r_9035', code: '9035', name: 'Bermuda Jean', category: 'Bermudas', imageUrl: 'https://example.com/gray.png' }
+  const blue = { ...reference, id: 'r_9030', code: '9030', name: 'Bermuda Jean', category: 'Bermudas', imageUrl: 'https://example.com/blue.png' }
+  const products = hydrateCatalog({ references: [blue, gray], variants: [variant('blue30', { referenceKey: blue.id, size: '30', color: 'Azul' }), variant('blue32', { referenceKey: blue.id, size: '32', color: 'Azul' }), variant('gray34', { referenceKey: gray.id, size: '34', color: 'Gris' })] }, 'admin')
+  const [group] = groupCatalog(products, [blue, gray])
+  assert.equal(group.multiReference, true)
+  assert.deepEqual(group.codes, ['9030', '9035'])
+  assert.deepEqual(group.colors, ['Azul', 'Gris'])
+  assert.equal(findCatalogCombination(group.products, { color: 'Gris', size: '32' }), null)
+  assert.equal(findCatalogCombination(group.products, { color: 'Gris', size: '34' }).imageUrl, gray.imageUrl)
+})
+
 test('legacy reference collisions with different names remain separate before migration', () => {
   const data = { legacyProducts: [{ id: 'old1', reference: ' A4 ', name: 'Jean recto', stock: 8 }, { id: 'old2', reference: 'a4', name: 'Bermuda', stock: 9 }, { id: 'old3', reference: 'A4', name: 'JEAN RECTO', stock: 2 }] }
   const groups = groupCatalog(hydrateCatalog(data, 'admin'))

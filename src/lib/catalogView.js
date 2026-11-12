@@ -34,17 +34,21 @@ export function groupCatalog(products, references = []) {
   const headers = new Map(references.map(item => [item.id || item.referenceKey, item]))
   const groups = new Map()
   for (const product of products) {
-    const key = product.legacy ? `legacy:${catalogIdentity(product.reference)}:${catalogIdentity(product.name)}` : product.referenceKey || `ref:${catalogIdentity(product.reference)}:${catalogIdentity(product.name)}`
+    const key = `family:${catalogIdentity(product.name)}:${catalogIdentity(product.category)}:${product.kind || 'finished'}${product.legacy ? ':legacy' : ''}`
     if (!groups.has(key)) {
       const header = headers.get(product.referenceKey)
-      groups.set(key, { key, referenceKey: product.referenceKey, code: product.reference || 'Sin referencia', name: product.name, category: product.category || 'General', description: product.description || '', imageUrl: product.imageUrl || '', kind: product.kind, unit: product.unit, legacy: Boolean(product.legacy), header, products: [] })
+      groups.set(key, { key, name: product.name, category: product.category || 'General', description: product.description || '', imageUrl: product.imageUrl || '', kind: product.kind, unit: product.unit, legacy: Boolean(product.legacy), headers: header ? [header] : [], products: [] })
     }
-    groups.get(key).products.push(product)
+    const group = groups.get(key), header = headers.get(product.referenceKey)
+    group.products.push(product)
+    if (header && !group.headers.some(item => (item.id || item.referenceKey) === (header.id || header.referenceKey))) group.headers.push(header)
   }
   return [...groups.values()].map(group => {
     const existing = group.products.filter(item => !item.deleted), active = existing.filter(item => item.active !== false)
     const prices = existing.map(item => Number(item.price || 0))
-    return { ...group, colors: catalogAttributeOptions(existing, 'color', 'Sin color'), sizes: catalogAttributeOptions(existing, 'size', 'Única'), stock: existing.reduce((sum, item) => sum + item.stock, 0), availableStock: active.reduce((sum, item) => sum + item.stock, 0), activeCount: active.length, minPrice: prices.length ? Math.min(...prices) : 0, maxPrice: prices.length ? Math.max(...prices) : 0, defaultPrice: existing.find(item => Number(item.price) > 0)?.price || 0 }
+    const codes = [...new Set(group.products.map(item => item.reference || 'Sin referencia'))].sort((a, b) => a.localeCompare(b, 'es', { numeric: true }))
+    const single = codes.length === 1
+    return { ...group, code: codes.join(' · '), codes, multiReference: !single, referenceKey: single ? group.products[0]?.referenceKey : undefined, header: single ? group.headers[0] : undefined, colors: catalogAttributeOptions(existing, 'color', 'Sin color'), sizes: catalogAttributeOptions(existing, 'size', 'Única'), stock: existing.reduce((sum, item) => sum + item.stock, 0), availableStock: active.reduce((sum, item) => sum + item.stock, 0), activeCount: active.length, minPrice: prices.length ? Math.min(...prices) : 0, maxPrice: prices.length ? Math.max(...prices) : 0, defaultPrice: existing.find(item => Number(item.price) > 0)?.price || 0 }
   }).sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }) || a.code.localeCompare(b.code, 'es', { numeric: true }))
 }
 
