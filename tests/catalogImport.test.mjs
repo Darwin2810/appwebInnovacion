@@ -21,12 +21,29 @@ test('rechaza una referencia con nombres diferentes y exige precios antes de imp
     ['Jeans', 'A4', 'Otro producto', 'Negro', '38', 1, 0, 1, 1, 0, 'OK'],
   ] }])
   assert.match(result.errors[0], /no puede usarse/)
-  assert.match(validateImport(result.groups)[0], /precio mayor que cero/)
+  assert.match(validateImport(result.groups)[0], /precio válido mayor que cero/)
 })
 
 test('carga automáticamente la columna Precio venta COP sin exponer códigos técnicos', () => {
   const data = [headers.concat('Precio venta COP'), ['Jeans', '1005', 'Jean Recto Clásico', 'Azul Índigo', 30, 46, 0, 30, 46, 0, 'Cuadra', 145000]]
   const result = parseCatalogSheets([{ sheet: 'Inventario Prendas', data }])
   assert.equal(result.groups[0].variants[0].price, '145000')
+  assert.deepEqual(validateImport(result.groups), [])
+})
+
+test('agrupa insumos repetidos y convierte metros de hilo a centímetros', () => {
+  const garment = [{ sheet: 'Inventario Prendas', data: [headers.concat('Precio venta COP'), ['Jeans', '1005', 'Jean', 'Azul', 30, 1, 0, 1, 1, 0, 'Cuadra', 100000]] }]
+  const supplies = { sheet: 'Insumos', data: [[], [], ['N° medición', 'Ref', 'Insumo', 'Cantidades ingresadas', 'Unidad de medida', 'Tiempo', 'Precio venta COP', 'Costo unitario COP'],
+    [1, 'IN-BOT-01', 'Botón', 200, 'Unidades (und)', 2, 1000, 500],
+    [2, 'IN-BOT-01', 'Botón', 300, 'Unidades (und)', 2, 1000, 500],
+    [3, 'IN-HIL-03', 'Hilo', 50, 'Metros (m)', 2, 20, 10],
+  ] }
+  const result = parseCatalogSheets([...garment, supplies])
+  const button = result.groups.find(group => group.reference.code === 'IN-BOT-01')
+  const thread = result.groups.find(group => group.reference.code === 'IN-HIL-03')
+  assert.equal(button.variants[0].stock, 500)
+  assert.equal(thread.reference.unit, 'cm')
+  assert.equal(thread.variants[0].stock, 5000)
+  assert.equal(thread.variants[0].unitCost, '10')
   assert.deepEqual(validateImport(result.groups), [])
 })

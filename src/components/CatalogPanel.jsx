@@ -238,7 +238,7 @@ export default function CatalogPanel({ data, run, role, busy }) {
     let imported = 0
     for (const group of importGroups) {
       for (let offset = 0; offset < group.variants.length; offset += 20) {
-        const variants = group.variants.slice(offset, offset + 20).map(item => ({ size: item.size, color: item.color, lot: item.lot, stock: Number(item.stock), minStock: Number(item.minStock), priceCents: priceCents(item.price) }))
+        const variants = group.variants.slice(offset, offset + 20).map(item => ({ size: item.size, color: item.color, lot: item.lot, stock: Number(item.stock), minStock: Number(item.minStock), priceCents: priceCents(item.price), ...(item.unitCost === '' || item.unitCost == null ? {} : { unitCostCents: priceCents(item.unitCost) }) }))
         await command('catalog.create', { reference: group.reference, variants })
         imported += variants.length
       }
