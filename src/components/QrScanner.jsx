@@ -175,7 +175,7 @@ export default function QrScanner({ onScan, onClose }) {
   }
   return (
     <div className="qr-scanner">
-      <p className="qr-guidance">Escanea un QR de producto o un código SKU. El lector no abre enlaces externos.</p>
+      <p className="qr-guidance">Escanea un QR de producto. El lector no abre enlaces externos.</p>
       {!secureCamera && <p className="qr-error" role="alert">La cámara necesita HTTPS (o localhost en el computador). Una dirección HTTP de la red Wi-Fi no permite usarla en el celular. Puedes leer una imagen del QR mientras preparas un sitio HTTPS.</p>}
       <div id={readerId} className="qr-video" />
       <div className="qr-camera-controls">
@@ -187,7 +187,7 @@ export default function QrScanner({ onScan, onClose }) {
       <p className="qr-status" role="status">{status}</p>
       {error && <p className="qr-error" role="alert">{error}</p>}
       <div className="form-field">
-        <label htmlFor={`${readerId}-text`}>SKU o contenido del QR</label>
+        <label htmlFor={`${readerId}-text`}>Contenido del QR</label>
         <textarea id={`${readerId}-text`} value={manualText} onChange={(event) => setManualText(event.target.value)} maxLength={8192} rows={3} />
         <button type="button" className="secondary-button" disabled={!ready || working || !manualText.trim()} onClick={() => { processingRef.current = false; void decoded(manualText) }}>Procesar código</button>
       </div>

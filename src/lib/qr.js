@@ -15,7 +15,7 @@ export function parseProductQr(text) {
   if (SKU.test(trimmed)) return { kind: 'sku', sku: trimmed }
   let data
   try { data = JSON.parse(trimmed) } catch {
-    fail('Usa un QR de producto de esta aplicación o un código SKU. No se abren enlaces externos.')
+    fail('Usa un QR de producto de esta aplicación. No se abren enlaces externos.')
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) fail('El QR no contiene un producto válido.')
   if (Object.keys(data).some((key) => !ALLOWED.has(key))) fail('El QR contiene campos no admitidos.')
@@ -26,7 +26,7 @@ export function parseProductQr(text) {
     result.id = data.id
   }
   if (Object.hasOwn(data, 'sku')) {
-    if (typeof data.sku !== 'string' || !SKU.test(data.sku)) fail('El SKU admite letras, números, puntos y guiones (máximo 40).')
+    if (typeof data.sku !== 'string' || !SKU.test(data.sku)) fail('El identificador interno del QR no es válido.')
     result.sku = data.sku
   }
   for (const [field, limit] of Object.entries(TEXT)) {
@@ -58,7 +58,7 @@ export function parseProductQr(text) {
     if (data.currency !== 'COP') fail('La moneda del QR debe ser COP.')
     result.fields.currency = 'COP'
   }
-  if (!result.id && !result.sku && (!result.fields.name || result.fields.price === undefined || result.fields.stock === undefined)) fail('Un producto nuevo necesita nombre, precio y stock; un producto existente necesita ID o SKU.')
+  if (!result.id && !result.sku && (!result.fields.name || result.fields.price === undefined || result.fields.stock === undefined)) fail('Un producto nuevo necesita nombre, precio y stock; un producto existente necesita un identificador válido.')
   return result
 }
 

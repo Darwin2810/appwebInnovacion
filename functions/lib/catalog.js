@@ -27,8 +27,8 @@ function bool(value, label) {
 }
 
 function skuFields(value) {
-  const sku = text(value, 'SKU', 40).normalize('NFKC')
-  if (!/^[A-Za-z0-9._-]{1,40}$/.test(sku)) fail('invalid-argument', 'El SKU admite letras, números, puntos, guiones y guiones bajos, hasta 40 caracteres.')
+  const sku = text(value, 'Identificador interno', 40).normalize('NFKC')
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(sku)) fail('invalid-argument', 'El identificador interno no es válido.')
   return { sku, skuKey: sku.toLowerCase() }
 }
 
@@ -65,10 +65,17 @@ function header(input) {
   }
 }
 
-function variantFields(input) {
+function internalVariantCode(referenceKey, input) {
+  const parts = [referenceKey, input.size, input.color, input.lot].map(value => String(value ?? '').normalize('NFKC').trim().toLocaleLowerCase('es').replace(/\s+/gu, ' '))
+  return `AUTO-${createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)}`
+}
+
+function variantFields(input, referenceKey, existingSku = '') {
   object(input, 'La variante')
   return {
-    ...skuFields(input.sku),
+    // Stable database key for indices and old labels. It is intentionally not
+    // exposed in the product workflow: users work with reference and variant.
+    ...skuFields(existingSku || input.sku || internalVariantCode(referenceKey, input)),
     size: optional(input.size, 'Talla', 20),
     color: optional(input.color, 'Color', 40),
     lot: optional(input.lot, 'Lote', 60),
@@ -258,14 +265,14 @@ async function createCatalog(tx, ctx, payload) {
   object(payload, 'El producto')
   const incoming = header(payload.reference)
   const inputs = list(payload.variants, 'Las variantes').map(input => {
-    const fields = variantFields(input)
+    const fields = variantFields(input, incoming.id)
     const stock = integer(input.stock ?? 0, 'Stock inicial', 0, MAX_STOCK)
     const valueCents = acquisitionCost(ctx, input.unitCostCents, stock)
     return { ref: ref(ctx, 'variants'), fields, stock, valueCents }
   })
   const skus = inputs.map(item => item.fields.skuKey)
   const combinations = inputs.map(item => combinationKey(incoming.id, item.fields))
-  if (new Set(skus).size !== skus.length) fail('already-exists', 'No repitas el SKU entre variantes.')
+  if (new Set(skus).size !== skus.length) fail('already-exists', 'No repitas la misma variante.')
   if (new Set(combinations).size !== combinations.length) fail('already-exists', 'No repitas la misma combinación de talla, color y lote en una referencia.')
   const referenceRef = ref(ctx, 'references', incoming.id)
   const [reference, ...indices] = await readAll(tx, [referenceRef, ...skus.map(sku => indexRef(ctx, sku)), ...inputs.map(item => combinationRef(ctx, incoming.id, item.fields))])
@@ -274,8 +281,8 @@ async function createCatalog(tx, ctx, payload) {
     validateHeader(reference.data(), incoming.data)
     assertReferenceAvailable(reference.data())
   }
-  if (indices.some(snapshot => snapshot.exists)) fail('already-exists', 'El SKU o la combinación de talla, color y lote ya existe en el inventario.')
-  if (legacy.size) fail('already-exists', `El SKU ${[...legacy.keys()][0]} pertenece a un producto anterior. Migra ese producto antes de añadir variantes.`)
+  if (indices.some(snapshot => snapshot.exists)) fail('already-exists', 'La combinación de talla, color y lote ya existe en el inventario.')
+  if (legacy.size) fail('already-exists', 'Esta variante pertenece a un producto anterior. Migra ese producto antes de añadir variantes.')
   await assertLegacyReference(tx, ctx, incoming.data)
   const referenceData = reference.exists ? reference.data() : incoming.data
   if (!reference.exists) tx.set(referenceRef, { ...incoming.data, active: true, deleted: false, ...created(ctx) })
@@ -317,16 +324,16 @@ async function editVariant(tx, ctx, payload) {
   const item = await loadStockItem(tx, ctx, payload.variantId)
   assertNotDeleted(item.data, 'La variante')
   assertNotDeleted(item.referenceData, 'La referencia')
-  const fields = variantFields(payload)
+  const fields = variantFields(payload, item.data.referenceKey, item.data.sku)
   const newIndex = indexRef(ctx, fields.skuKey)
   const newCombination = combinationRef(ctx, item.data.referenceKey, fields)
   const [sku, combination] = await readAll(tx, [newIndex, newCombination])
   const legacy = await legacyReservations(tx, ctx, [fields.skuKey])
-  if (sku.exists && sku.data().variantId !== item.ref.id) fail('already-exists', 'Ese SKU ya pertenece a otra variante.')
+  if (sku.exists && sku.data().variantId !== item.ref.id) fail('already-exists', 'La variante ya está registrada.')
   if (combination.exists && combination.data().variantId !== item.ref.id) fail('already-exists', 'Esa combinación de talla, color y lote ya existe para la referencia.')
-  if (legacy.has(fields.skuKey) && legacy.get(fields.skuKey) !== item.ref.id) fail('already-exists', 'Ese SKU pertenece a un producto anterior pendiente de migración.')
+  if (legacy.has(fields.skuKey) && legacy.get(fields.skuKey) !== item.ref.id) fail('already-exists', 'La variante pertenece a un producto anterior pendiente de migración.')
   const skuAliases = [...new Set([...(item.data.skuAliases ?? []), ...(item.data.skuKey !== fields.skuKey ? [item.data.skuKey] : [])])].filter(value => value !== fields.skuKey)
-  if (skuAliases.length > 50) fail('failed-precondition', 'Esta variante ya conserva 50 SKU anteriores. Mantén su código para no perder la trazabilidad de las etiquetas.')
+  if (skuAliases.length > 50) fail('failed-precondition', 'Esta variante ya conserva demasiados identificadores anteriores. Solicita una revisión técnica.')
   // Every previously printed SKU remains reserved to the same variant. Reusing
   // it for another item would make an old label point at the wrong product.
   const oldCombination = combinationRef(ctx, item.data.referenceKey, item.data)
@@ -446,10 +453,10 @@ function writeDeletion(tx, ctx, items, reason, referenceKey, scope) {
 async function deleteVariant(tx, ctx, payload) {
   object(payload, 'La eliminación')
   const reason = text(payload.reason, 'Motivo de la eliminación', 500)
-  const confirmSku = text(payload.confirmSku, 'SKU de confirmación', 40)
   const item = await loadStockItem(tx, ctx, payload.variantId)
   assertNotDeleted(item.data, 'La variante')
-  if (confirmSku !== item.data.sku) fail('failed-precondition', 'Escribe exactamente el SKU de la variante para confirmar su eliminación y la baja de existencias.')
+  const confirmation = text(payload.confirmReference ?? payload.confirmSku, 'Referencia de confirmación', 60)
+  if (confirmation !== item.referenceData.code && confirmation !== item.data.sku) fail('failed-precondition', 'Escribe exactamente la referencia del producto para confirmar su eliminación y la baja de existencias.')
   const result = writeDeletion(tx, ctx, [item], reason, item.data.referenceKey, 'variant')
   return { id: item.ref.id, deleted: true, ...result }
 }
@@ -543,7 +550,7 @@ function legacyPrepared(snapshot, requested) {
   if (old.currency != null && old.currency !== 'COP') fail('failed-precondition', `El producto anterior ${snapshot.id} no está registrado en COP. Revisa su moneda antes de migrar.`)
   const shortId = createHash('sha256').update(snapshot.id).digest('hex').slice(0, 24)
   const oldReference = optional(old.reference, 'Referencia anterior', 60)
-  const oldSku = optional(old.sku, 'SKU anterior', 40)
+  const oldSku = optional(old.sku, 'Identificador anterior', 40)
   const incoming = header({
     code: requested.referenceCode ?? (oldReference || `LEG-${shortId}`),
     name: old.name, category: old.category || 'General',
@@ -587,7 +594,7 @@ async function migrateLegacy(tx, ctx, payload) {
   }
   const skuKeys = prepared.map(item => item.fields.skuKey)
   const combinationKeys = prepared.map(item => combinationKey(item.incoming.id, item.fields))
-  if (new Set(skuKeys).size !== skuKeys.length) fail('already-exists', 'Dos productos anteriores comparten SKU. Corrige el código antes de migrarlos.')
+  if (new Set(skuKeys).size !== skuKeys.length) fail('already-exists', 'Dos productos anteriores comparten identificador. Corrige los registros antes de migrarlos.')
   if (new Set(combinationKeys).size !== combinationKeys.length) fail('already-exists', 'Dos productos anteriores tienen la misma referencia, talla, color y lote. Reasigna la referencia de uno para conservarlos sin duplicar variantes.')
   const headerIds = [...headers.keys()]
   const [headerSnapshots, skuSnapshots, combinationSnapshots] = await Promise.all([
@@ -603,7 +610,7 @@ async function migrateLegacy(tx, ctx, payload) {
       headers.set(headerIds[index], snapshot.data())
     }
   }
-  if (skuSnapshots.some(snapshot => snapshot.exists) || combinationSnapshots.some(snapshot => snapshot.exists)) fail('already-exists', 'Un SKU o una combinación anterior ya está asignado. Revisa la referencia y los códigos; la migración no sobrescribe datos.')
+  if (skuSnapshots.some(snapshot => snapshot.exists) || combinationSnapshots.some(snapshot => snapshot.exists)) fail('already-exists', 'Una combinación anterior ya está asignada. Revisa la referencia y sus variantes; la migración no sobrescribe datos.')
   const migratingIds = new Set(prepared.map(item => item.legacyId))
   await assertLegacyReference(tx, ctx, [...headers.values()], migratingIds)
   for (let index = 0; index < headerIds.length; index++) {

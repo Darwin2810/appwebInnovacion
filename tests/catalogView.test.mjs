@@ -52,10 +52,11 @@ test('viewer and seller catalogs exclude raw material rows', () => {
   assert.equal(hydrateCatalog(data, 'seller').length, 1)
 })
 
-test('search discovers a reference through accented color, size, lot or a historical SKU', () => {
+test('search discovers a reference through name, reference, accented color, size or lot', () => {
   const products = hydrateCatalog({ references: [reference], variants: [variant('sku1', { color: 'Índigo', lot: 'L-2026', skuAliases: ['ANTERIOR-01'] })] }, 'viewer')
   const [group] = groupCatalog(products, [reference])
-  for (const text of ['indigo', '36', 'L-2026', 'anterior-01', 'jean recto', 'A4']) assert.equal(matchesCatalogGroup(group, text), true, text)
+  for (const text of ['indigo', '36', 'L-2026', 'jean recto', 'A4']) assert.equal(matchesCatalogGroup(group, text), true, text)
+  assert.equal(matchesCatalogGroup(group, 'anterior-01'), false)
   assert.equal(matchesCatalogGroup(group, 'inexistente'), false)
 })
 

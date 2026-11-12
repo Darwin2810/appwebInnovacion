@@ -50,10 +50,10 @@ export function groupCatalog(products, references = []) {
 
 export function matchesCatalogGroup(group, query = '') {
   const search = catalogSearchText(query)
-  return !search || group.products.some(item => catalogSearchText([item.name, item.reference, item.category, item.sku, ...(Array.isArray(item.skuAliases) ? item.skuAliases : []), item.size, item.color, item.lot].join(' ')).includes(search))
+  return !search || group.products.some(item => catalogSearchText([item.name, item.reference, item.category, item.size, item.color, item.lot].join(' ')).includes(search))
 }
 
-// An unavailable size/color is never substituted for a different physical SKU.
+// An unavailable size/color is never substituted for a different physical variant.
 export function findCatalogCombination(products, { color, size, lot } = {}) {
   return products.find(item => (color === undefined || catalogIdentity(catalogOptionLabel(item.color, 'Sin color')) === catalogIdentity(color)) && (size === undefined || catalogIdentity(catalogOptionLabel(item.size, 'Única')) === catalogIdentity(size)) && (lot === undefined || catalogIdentity(catalogOptionLabel(item.lot, 'Sin lote')) === catalogIdentity(lot))) || null
 }

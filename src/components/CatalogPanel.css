@@ -42,6 +42,12 @@
   .catalog-module .modal-actions > button { flex: 1 1 140px; }
   .catalog-inline-actions > button { flex: 1 1 150px; }
 }
+
+.catalog-import-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0; }
+.catalog-import-summary strong { padding: 1rem; border: 1px solid var(--border); border-radius: 12px; background: #f8faf5; text-align: center; }
+.catalog-import-form .table-wrap { max-height: 48vh; margin: 1rem 0; }
+.catalog-import-form td input { min-width: 8rem; }
+@media (max-width: 640px) { .catalog-import-summary { grid-template-columns: 1fr; } }
 @media (max-width: 380px) {
   .catalog-stats { grid-template-columns: minmax(0, 1fr); }
   .catalog-variant-row .form-grid { grid-template-columns: minmax(0, 1fr); }

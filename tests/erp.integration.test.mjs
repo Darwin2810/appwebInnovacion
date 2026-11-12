@@ -280,38 +280,24 @@ describe('ERP transaccional: catálogo, permisos, dinero y trazabilidad', {
     await balancedLedger()
   })
 
-  test('cambiar SKU conserva alias e índices: etiquetas anteriores nunca apuntan a otro producto y se puede deshacer', async () => {
+  test('el identificador técnico permanece oculto e inmutable al editar la variante', async () => {
     const item = await catalog()
     const original = item.sku
-    const second = 'JEAN-100-AZ-32-V2'
-    const third = 'JEAN-100-AZ-32-V3'
-    const edit = (sku) => command('catalog.variant', {
-      variantId: item.id, sku, size: item.size, color: item.color, lot: item.lot,
+    await command('catalog.variant', {
+      variantId: item.id, sku: 'IGNORAR-ESTE-VALOR', size: item.size, color: item.color, lot: item.lot,
       priceCents: item.priceCents, minStock: item.minStock,
     })
-    await edit(second)
-    assert.deepEqual((await read('variants', item.id)).skuAliases, [original.toLowerCase()])
-    assert.equal((await read('variantSkuIndex', `s_${original.toLowerCase()}`)).variantId, item.id)
-    await reject('catalog.create', {
-      reference: { code: 'ANOTHER-REFERENCE', name: 'Bermuda distinta', kind: 'finished', unit: 'unidad', category: 'Bermudas' },
-      variants: [{ sku: original, size: '', color: '', lot: '', stock: 0, priceCents: 1000, minStock: 0 }],
+    const edited = await read('variants', item.id)
+    assert.equal(edited.sku, original)
+    assert.deepEqual(edited.skuAliases, [])
+    const generated = await command('catalog.create', {
+      reference: { code: 'AUTO-CODE', name: 'Producto automático', kind: 'finished', unit: 'unidad', category: 'Prueba' },
+      variants: [{ size: 'M', color: 'Negro', lot: '', stock: 0, priceCents: 1000, minStock: 0 }],
     })
-    assert.equal((await rows('references')).length, 1, 'Un SKU anterior reservado no deja una referencia nueva parcial')
-    await edit(third)
-    assert.deepEqual(new Set((await read('variants', item.id)).skuAliases), new Set([original.toLowerCase(), second.toLowerCase()]))
-    await edit(second)
-    assert.equal((await read('variants', item.id)).sku, second)
-    assert.deepEqual(new Set((await read('variants', item.id)).skuAliases), new Set([original.toLowerCase(), third.toLowerCase()]))
-    await edit(original)
-    const restored = await read('variants', item.id)
-    assert.equal(restored.sku, original)
-    assert.deepEqual(new Set(restored.skuAliases), new Set([second.toLowerCase(), third.toLowerCase()]))
-    assert.equal(restored.stock, 10)
-    assert.equal((await read('costs', item.id)).stockValueCents, 10000)
-    for (const sku of [original, second, third]) {
-      assert.equal((await read('variantSkuIndex', `s_${sku.toLowerCase()}`)).variantId, item.id)
-    }
-    assert.equal((await rows('variants')).length, 1)
+    const automaticId = generated.result.variantIds[0]
+    const automatic = await read('variants', automaticId)
+    assert.match(automatic.sku, /^AUTO-[a-f0-9]{24}$/)
+    assert.equal((await read('variantSkuIndex', `s_${automatic.sku.toLowerCase()}`)).variantId, automaticId)
   })
 
   test('comandos idempotentes: reintentar no suma dos veces y cambiar payload/actor con el mismo ID falla', async () => {

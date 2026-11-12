@@ -179,9 +179,9 @@ test('archiving positive stock preserves valuation and blocks movement through e
 test('deletion requires exact confirmation, writes off all stock and cost, and restoration only recovers metadata', async () => {
   const store = catalogStore()
   const current = store.transaction()
-  await assert.rejects(handlers['catalog.delete'].run(current.tx, current.ctx, { variantId: 'v_0', reason: 'Producto retirado', confirmSku: 'A4-OTRO' }), /exactamente el SKU/)
+  await assert.rejects(handlers['catalog.delete'].run(current.tx, current.ctx, { variantId: 'v_0', reason: 'Producto retirado', confirmReference: 'OTRA' }), /exactamente la referencia/)
   assert.equal(current.writes.length, 0)
-  const { result, writes } = await store.run('catalog.delete', { variantId: 'v_0', reason: 'Producto retirado', confirmSku: 'A4-0' })
+  const { result, writes } = await store.run('catalog.delete', { variantId: 'v_0', reason: 'Producto retirado', confirmReference: 'A4' })
   assert.equal(result.writeOffQuantity, 3)
   const variant = store.records.get('variants/v_0')
   assert.equal(variant.stock, 0)

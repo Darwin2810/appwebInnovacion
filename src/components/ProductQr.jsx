@@ -10,7 +10,7 @@ export default function ProductQr({ product, draft = false }) {
   let payloadError = ''
   try {
     payload = makeProductQr(draft ? { ...product, id: undefined } : product)
-    if (!draft && product.id) compactPayload = makeProductQr({ id: product.id, sku: product.sku })
+    if (!draft && product.id) compactPayload = makeProductQr({ id: product.id })
   } catch (error) { payloadError = error.message }
   const current = generated.source === payload ? generated : null
   const image = current?.image || ''
@@ -51,7 +51,7 @@ export default function ProductQr({ product, draft = false }) {
       {image && !error && !payloadError && <img className="qr-image" src={image} alt={`Código QR del producto ${product.name}`} width="360" height="360" />}
       {!image && !error && !payloadError && <p role="status">Generando QR…</p>}
       <div className="qr-actions">
-        {image && !error && <a className="primary-button" href={image} download={`producto-${product.sku || product.id || 'qr'}.png`}>Descargar QR</a>}
+        {image && !error && <a className="primary-button" href={image} download={`producto-${product.reference || product.id || 'qr'}.png`}>Descargar QR</a>}
         {effectivePayload && <button type="button" className="secondary-button" onClick={copy}>Copiar contenido</button>}
       </div>
       {notice && <p className="qr-status" role="status">{notice}</p>}
