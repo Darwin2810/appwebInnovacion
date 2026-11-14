@@ -1006,3 +1006,14 @@
 }
 .erp-navigation { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0 1.5rem; }
 .erp-navigation button { min-height: 44px; }
+.offline-queue { margin: 0 0 18px; padding: 14px 16px; border: 1px solid #d8b86a; border-radius: 9px; background: #fff9e9; color: #4b4026; }
+.offline-queue > summary { cursor: pointer; font-size: 13px; font-weight: 700; }
+.offline-queue > p { margin: 12px 0; color: #6e6246; font-size: 12px; line-height: 1.6; }
+.offline-queue-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.offline-queue ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.offline-queue li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; border: 1px solid #ead9aa; border-radius: 7px; background: #fff; }
+.offline-queue li > span:first-child { display: grid; gap: 4px; min-width: 0; }
+.offline-queue li small { display: block; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.offline-queue .offline-error { color: #9a4636; }
+.offline-entry-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+@media (max-width: 640px) { .offline-queue li { align-items: stretch; flex-direction: column; } .offline-entry-actions > button { flex: 1; } }

@@ -1,7 +1,7 @@
 // Store only the public interface. Firebase, authentication and inventory
 // traffic are deliberately left to the network and Firebase SDK.
 const CACHE_PREFIX = 'exlaider-shell-'
-const CACHE_NAME = `${CACHE_PREFIX}v2.1`
+const CACHE_NAME = `${CACHE_PREFIX}v2.5`
 const SHELL_URL = '/index.html'
 const STATIC_URLS = [
   '/manifest.webmanifest',
@@ -17,6 +17,12 @@ function isApplicationAsset(url) {
   return url.origin === worker.location.origin
     && (STATIC_URLS.includes(url.pathname)
       || /^\/assets\/[\w.-]+\.(?:js|css|woff2?|svg|png|webp|jpg|jpeg|ico)$/.test(url.pathname))
+}
+
+function isCatalogImage(url) {
+  return url.origin === 'https://raw.githubusercontent.com'
+    && url.pathname.startsWith('/Darwin2810/appwebInnovacion/exlaider-erp/docs/imagenes-productos/')
+    && url.pathname.endsWith('.png')
 }
 
 worker.addEventListener('install', (event) => {
@@ -53,8 +59,8 @@ worker.addEventListener('activate', (event) => {
 worker.addEventListener('fetch', (event) => {
   const request = event.request
   const url = new URL(request.url)
-  if (request.method !== 'GET' || url.origin !== worker.location.origin
-    || request.headers.has('authorization')) return
+  if (request.method !== 'GET' || request.headers.has('authorization')) return
+  if (url.origin !== worker.location.origin && !isCatalogImage(url)) return
 
   if (request.mode === 'navigate' && ['/', SHELL_URL].includes(url.pathname)) {
     event.respondWith((async () => {
@@ -72,13 +78,13 @@ worker.addEventListener('fetch', (event) => {
     return
   }
 
-  if (!isApplicationAsset(url)) return
+  if (!isApplicationAsset(url) && !isCatalogImage(url)) return
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME)
     const cached = await cache.match(request)
     if (cached) return cached
     const response = await fetch(request)
-    if (response.ok && response.type === 'basic') {
+    if ((response.ok && (response.type === 'basic' || response.type === 'cors')) || response.type === 'opaque') {
       await cache.put(request, response.clone())
     }
     return response

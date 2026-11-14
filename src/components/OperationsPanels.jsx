@@ -88,7 +88,7 @@ function ActionForm({ title, description, run, busy, action, getPayload, onDone,
       if (!request.current || request.current.fingerprint !== fingerprint) request.current = { fingerprint, id: newRequestId() }
       const result = await run(action, payload, request.current.id)
       request.current = null
-      setNotice(`Operación confirmada en la nube.${result?.id ? ` Registro: ${result.id}` : ''}`)
+      setNotice(result?.queued ? 'Operación guardada en este dispositivo. Se sincronizará automáticamente.' : `Operación confirmada en la nube.${result?.id ? ` Registro: ${result.id}` : ''}`)
       onDone?.(result)
     } catch (err) { setError(err?.message || 'No se pudo guardar. Revisa los datos y la conexión.') }
     finally { setPending(false) }

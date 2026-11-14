@@ -169,7 +169,7 @@ export default function CatalogPanel({ data, run, role, busy }) {
   const pendingCommand = useRef(null)
   const close = useCallback(() => setDialog(null), [])
   const admin = role === 'admin', intake = ['admin', 'operator'].includes(role)
-  const canWrite = intake && !busy && !data.loading && !data.error && !data.fromCache && navigator.onLine
+  const canWrite = intake && !busy && !data.loading && !data.error
   const references = data.references || []
   const all = hydrateCatalog(data, role)
   const catalog = admin ? all : all.filter(product => product.active && !product.deleted)
@@ -195,7 +195,7 @@ export default function CatalogPanel({ data, run, role, busy }) {
     stats.push(['Valor al costo registrado', displayMoney((data.costs || []).reduce((sum, cost) => sum + Number(cost.stockValueCents || 0), 0) / 100), 'Privado · incluye stock archivado'])
   }
   async function command(action, payload) {
-    if (!canWrite) throw new Error('Espera la conexión con la nube para guardar. El QR sin guardar puede prepararse sin conexión.')
+    if (!canWrite) throw new Error('Espera a que el inventario local termine de cargar.')
     if (!admin && action !== 'stock.receive') throw new Error('Solo el administrador puede modificar el catálogo.')
     if (['catalog.delete', 'catalog.deleteReference'].includes(action) && data.privateLoading) throw new Error('Espera a que se sincronicen los costos antes de confirmar la baja.')
     if (payload.variantId) {
@@ -217,8 +217,8 @@ export default function CatalogPanel({ data, run, role, busy }) {
   }
   async function complete(action, payload, success) {
     const currentDialog = dialog
-    await command(action, payload)
-    setNotice(success)
+    const result = await command(action, payload)
+    setNotice(result?.queued ? 'Operación guardada en este dispositivo. Se sincronizará automáticamente al recuperar internet.' : success)
     setDialog(current => current === currentDialog ? null : current)
   }
   const dialogProduct = all.find(product => product.id === dialog?.productId)

@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from 'firebase/app'
 import { connectAuthEmulator, getAuth } from 'firebase/auth'
-import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
+import { connectFirestoreEmulator, getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 
 const settings = import.meta.env || globalThis.process?.env || {}
 const useEmulators = settings.MODE === 'emulator' || settings.VITE_FIREBASE_MODE === 'emulator'
@@ -30,7 +30,12 @@ if (!/^[a-zA-Z0-9_-]{1,80}$/.test(companyId)) {
   try {
     const app = getApps().find((item) => item.name === 'inventario') || initializeApp(config, 'inventario')
     const auth = getAuth(app)
-    const db = getFirestore(app)
+    let db
+    if (useEmulators) db = getFirestore(app)
+    else {
+      try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }) }
+      catch { db = getFirestore(app) }
+    }
     if (useEmulators && !app._inventarioEmulatorsConnected) {
       connectAuthEmulator(auth, `http://${emulatorHost}:9099`)
       connectFirestoreEmulator(db, emulatorHost, 8080)
