@@ -3,7 +3,6 @@ import { Writable } from 'node:stream'
 import { loadEnv } from 'vite'
 import { initializeApp, deleteApp } from 'firebase/app'
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth'
-import { getFunctions, httpsCallable } from 'firebase/functions'
 
 const projectId = process.argv[2]
 const config = loadEnv('production', process.cwd(), 'VITE_')
@@ -30,12 +29,22 @@ try {
   const password = await prompt.question('')
   muted = false
   process.stdout.write('\n')
-  await signInWithEmailAndPassword(getAuth(app), email.trim(), password)
+  const { user } = await signInWithEmailAndPassword(getAuth(app), email.trim(), password)
   console.log('Esta acción reemplaza los datos operativos de EXLAIDER de forma permanente.')
   const confirmation = await prompt.question('Escribe REINICIALIZAR EXLAIDER-JEANS: ')
-  const reset = httpsCallable(getFunctions(app, 'us-east1'), 'resetExlaider', { timeout: 540_000 })
-  const { data } = await reset({ companyId: 'exlaider-jeans', confirmation })
-  console.log(JSON.stringify(data, null, 2))
+  const token = await user.getIdToken()
+  const response = await fetch(`https://us-east1-${projectId}.cloudfunctions.net/resetExlaider`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ data: { companyId: 'exlaider-jeans', confirmation } }),
+    signal: AbortSignal.timeout(540_000),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok || payload?.error || !payload?.result) {
+    const detail = payload?.error?.message || payload?.error?.status || 'Respuesta sin el formato de Firebase Functions'
+    throw new Error(`resetExlaider (HTTP ${response.status}): ${detail}`)
+  }
+  console.log(JSON.stringify(payload.result, null, 2))
 } catch (error) {
   console.error(error.message)
   process.exitCode = 1
