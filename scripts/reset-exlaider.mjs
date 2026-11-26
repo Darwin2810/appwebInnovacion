@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
 import { Writable } from 'node:stream'
 import { loadEnv } from 'vite'
 import { initializeApp, deleteApp } from 'firebase/app'
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth'
 
-const projectId = process.argv[2]
+const [projectId, mode, ...extra] = process.argv.slice(2)
+const correctDates = mode === '--corregir-fechas-insumos'
+if ((mode && !correctDates) || extra.length) throw new Error('Opción desconocida.')
 const config = loadEnv('production', process.cwd(), 'VITE_')
 if (!projectId || projectId !== config.VITE_FIREBASE_PROJECT_ID || projectId.startsWith('demo-') ||
     config.VITE_FIREBASE_MODE === 'emulator' || !config.VITE_FIREBASE_API_KEY) {
@@ -30,19 +33,28 @@ try {
   muted = false
   process.stdout.write('\n')
   const { user } = await signInWithEmailAndPassword(getAuth(app), email.trim(), password)
-  console.log('Esta acción reemplaza los datos operativos de EXLAIDER de forma permanente.')
-  const confirmation = await prompt.question('Escribe REINICIALIZAR EXLAIDER-JEANS: ')
+  const companyId = 'exlaider-jeans'
+  let endpoint, data
+  if (correctDates) {
+    endpoint = 'erp'
+    data = { companyId, action: 'maintenance.correctSupplyDates', requestId: randomUUID() }
+  } else {
+    endpoint = 'resetExlaider'
+    console.log('Esta acción reemplaza los datos operativos de EXLAIDER de forma permanente.')
+    const confirmation = await prompt.question('Escribe REINICIALIZAR EXLAIDER-JEANS: ')
+    data = { companyId, confirmation }
+  }
   const token = await user.getIdToken()
-  const response = await fetch(`https://us-east1-${projectId}.cloudfunctions.net/resetExlaider`, {
+  const response = await fetch(`https://us-east1-${projectId}.cloudfunctions.net/${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ data: { companyId: 'exlaider-jeans', confirmation } }),
+    body: JSON.stringify({ data }),
     signal: AbortSignal.timeout(540_000),
   })
   const payload = await response.json().catch(() => null)
   if (!response.ok || payload?.error || !payload?.result) {
     const detail = payload?.error?.message || payload?.error?.status || 'Respuesta sin el formato de Firebase Functions'
-    throw new Error(`resetExlaider (HTTP ${response.status}): ${detail}`)
+    throw new Error(`${endpoint} (HTTP ${response.status}): ${detail}`)
   }
   console.log(JSON.stringify(payload.result, null, 2))
 } catch (error) {

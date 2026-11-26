@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { withCommand } from '../functions/lib/core.js'
 import { handlers } from '../functions/lib/catalog.js'
-import { COMPANY, CONFIRMATION, operationalCollections, reinitializeExlaider } from '../functions/lib/reinitialize.js'
+import { COMPANY, CONFIRMATION, operationalCollections, reinitializeExlaider, correctInitialSupplyDates } from '../functions/lib/reinitialize.js'
 
 const requireFunctions = createRequire(new URL('../functions/package.json', import.meta.url))
 
@@ -101,6 +101,20 @@ test('reinicializa EXLAIDER una vez, conserva cuentas y reemplaza los datos oper
     assert.equal((await rows('variantSkuIndex')).length, 19)
     assert.equal((await rows('variantCombinationIndex')).length, 19)
     for (const name of operationalCollections) assert.equal((await org.collection(name).doc('old').get()).exists, false)
+
+    const correctDates = uid => withCommand(db, uid, {
+      companyId: COMPANY, action: 'maintenance.correctSupplyDates', requestId: randomUUID(),
+    }, { 'maintenance.correctSupplyDates': correctInitialSupplyDates })
+    await assert.rejects(correctDates('reset-operator'), { code: 'permission-denied' })
+    const beforeCorrection = new Map((await rows('movements')).map(doc => [doc.id, doc.data()]))
+    const correction = await correctDates('reset-admin')
+    assert.equal(correction.updated, 3)
+    assert.equal(correction.date, '2026-10-23')
+    for (const doc of await rows('movements')) {
+      const before = beforeCorrection.get(doc.id)
+      assert.deepEqual(doc.data(), before.sourceType === 'catalog_initial' ? { ...before, date: '2026-10-23' } : before)
+    }
+    assert.equal((await correctDates('reset-admin')).updated, 0)
 
     await org.collection('sales').doc('post-reset').set({ retained: true })
     assert.equal((await reset()).replayed, true)

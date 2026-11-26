@@ -6,11 +6,11 @@ import { logger } from 'firebase-functions'
 import { withCommand, AppError, key } from './lib/core.js'
 import { handlers as catalog } from './lib/catalog.js'
 import { handlers as operations } from './lib/operations.js'
-import { reinitializeExlaider } from './lib/reinitialize.js'
+import { reinitializeExlaider, correctInitialSupplyDates } from './lib/reinitialize.js'
 
 initializeApp()
 const db = getFirestore()
-const handlers = { ...catalog, ...operations }
+const handlers = { ...catalog, ...operations, 'maintenance.correctSupplyDates': correctInitialSupplyDates }
 handlers['members.save'].prepare = async (_ctx, payload) => {
   try { await getAuth().getUser(key(payload.uid, 'UID')) }
   catch (error) {

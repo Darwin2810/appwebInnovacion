@@ -133,3 +133,31 @@ export async function reinitializeExlaider(db, uid, input) {
   if (!receipt.validated) await verify(db, org, marker)
   return { ...receipt.summary, validated: true, replayed }
 }
+
+export const correctInitialSupplyDates = {
+  roles: ['admin'],
+  async run(tx, ctx) {
+    if (ctx.companyId !== COMPANY) fail('permission-denied', 'Esta corrección solo está habilitada para EXLAIDER.')
+    const marker = await tx.get(ctx.org.collection('_maintenance').doc(RESET_ID))
+    if (marker.get('validated') !== true) fail('failed-precondition', 'La carga inicial debe estar validada.')
+
+    const date = '2026-10-23'
+    const codes = ['IN-BOT-01', 'IN-CRE-02', 'IN-HIL-03']
+    const movements = ctx.org.collection('movements')
+    const snapshots = await Promise.all(codes.map(code =>
+      tx.get(movements.where('referenceKey', '==', `r_${code.toLowerCase()}`)),
+    ))
+    const targets = snapshots.map((snapshot, index) => {
+      // The initial movements and the marker were created in the same transaction.
+      const matches = snapshot.docs.filter(doc =>
+        doc.createTime.isEqual(marker.createTime) && doc.get('sourceType') === 'catalog_initial' &&
+        doc.get('delta') === marker.get('summary.supplies')[codes[index]].quantity,
+      )
+      if (matches.length !== 1) fail('failed-precondition', `No se pudo identificar el movimiento inicial de ${codes[index]}.`)
+      return matches[0]
+    })
+    const pending = targets.filter(doc => doc.get('date') !== date)
+    for (const doc of pending) tx.update(doc.ref, { date })
+    return { date, updated: pending.length, references: codes }
+  },
+}
