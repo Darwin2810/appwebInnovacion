@@ -6,6 +6,7 @@ import { logger } from 'firebase-functions'
 import { withCommand, AppError, key } from './lib/core.js'
 import { handlers as catalog } from './lib/catalog.js'
 import { handlers as operations } from './lib/operations.js'
+import { reinitializeExlaider } from './lib/reinitialize.js'
 
 initializeApp()
 const db = getFirestore()
@@ -25,5 +26,14 @@ export const erp = onCall({ region: 'us-east1', maxInstances: 5, timeoutSeconds:
     if (error instanceof AppError) throw new HttpsError(error.code, error.message)
     logger.error('ERP command failed', { code: String(error.code || 'internal'), action: String(request.data?.action || '').slice(0, 80) })
     throw new HttpsError('internal', 'No se pudo confirmar la operación. Conserva los datos y vuelve a intentarlo.')
+  }
+})
+
+export const resetExlaider = onCall({ region: 'us-east1', timeoutSeconds: 540, memory: '512MiB' }, async request => {
+  try { return await reinitializeExlaider(db, request.auth?.uid, request.data) }
+  catch (error) {
+    if (error instanceof AppError) throw new HttpsError(error.code, error.message)
+    logger.error('EXLAIDER reset failed', { code: String(error.code || 'internal') })
+    throw new HttpsError('internal', 'No se pudo confirmar la reinicialización. Repite la misma acción para consultar el resultado.')
   }
 })

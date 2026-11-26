@@ -58,6 +58,8 @@ npm.cmd run firebase -- deploy --project exlaider-inventario --only "firestore,h
 
 ## 5. Entra y migra el inventario
 
+Para sustituir la información operativa por el Excel de campo de octubre de 2026, sigue el [procedimiento de reinicialización](docs/IMPORTAR_BASE_DE_CAMPO.md#reinicialización-desde-vs-code).
+
 Usa tu cuenta administradora existente. En Inventario aparece una sección para los productos anteriores. Pulsa **Revisar y migrar inventario**, corrige las referencias y confirma con **Migrar productos seleccionados**, hasta 20 por operación. El backend conserva los documentos anteriores y los IDs usados por los QR; no borra stock ni duplica una migración ya confirmada. Los costos anteriores desconocidos quedan pendientes: registra el costo real con **Valorar existencias** o con compras nuevas, sin usar el precio de venta como costo.
 
 Autoriza cuentas creadas en Authentication desde **Usuarios** con su UID exacto y rol `admin` (Administrador), `operator` (Operador), `seller` (Vendedor) o `viewer` (Usuario). El primer administrador conserva su documento `organizations/exlaider-jeans/members/UID`, con `active` booleano `true` y `role` texto `admin`.

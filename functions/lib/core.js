@@ -66,12 +66,12 @@ export function journal(tx, ctx, input) {
   tx.create(target, { sourceType, sourceId, note: text(input.note || '', 'Detalle del asiento', 1000, false), date: input.date ? businessDate(input.date) : ctx.now.toDate().toISOString().slice(0, 10), lines, debitCents, creditCents, ...created(ctx) })
   return target.id
 }
-function canonical(value) {
+export function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])]))
   return value
 }
-function authorize(snapshot, roles) {
+export function authorize(snapshot, roles) {
   const member = snapshot.data()
   if (!snapshot.exists || member.active !== true || !['admin', 'operator', 'seller', 'viewer'].includes(member.role) || !roles.includes(member.role)) fail('permission-denied', 'Tu cuenta no tiene permiso para esta operación.')
   return member.role

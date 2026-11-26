@@ -294,7 +294,7 @@ describe('ERP transaccional: catálogo, permisos, dinero y trazabilidad', {
       reference: { code: 'AUTO-CODE', name: 'Producto automático', kind: 'finished', unit: 'unidad', category: 'Prueba' },
       variants: [{ size: 'M', color: 'Negro', lot: '', stock: 0, priceCents: 1000, minStock: 0 }],
     })
-    const automaticId = generated.result.variantIds[0]
+    const automaticId = generated.variantIds[0]
     const automatic = await read('variants', automaticId)
     assert.match(automatic.sku, /^AUTO-[a-f0-9]{24}$/)
     assert.equal((await read('variantSkuIndex', `s_${automatic.sku.toLowerCase()}`)).variantId, automaticId)

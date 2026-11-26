@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { FieldPath } from 'firebase-admin/firestore'
-import { fail, text, integer, money, key, codeKey, nameKey, ref, meta, created, mulCents, proportion, journal } from './core.js'
+import { fail, text, integer, money, key, codeKey, nameKey, ref, meta, created, mulCents, proportion, journal, businessDate } from './core.js'
 
 const MAX_LINES = 20
 const MAX_STOCK = 1_000_000_000
@@ -53,7 +53,7 @@ function header(input) {
   const kind = input.kind ?? 'finished'
   const unit = input.unit ?? 'unidad'
   if (!['finished', 'material'].includes(kind)) fail('invalid-argument', 'El tipo debe ser producto terminado o material.')
-  if (!['unidad', 'cm', 'g'].includes(unit) || (kind === 'finished' && unit !== 'unidad')) fail('invalid-argument', 'Los productos terminados se registran en unidades; los materiales admiten unidad, cm o g.')
+  if (!['unidad', 'cm', 'm', 'g'].includes(unit) || (kind === 'finished' && unit !== 'unidad')) fail('invalid-argument', 'Los productos terminados se registran en unidades; los materiales admiten unidad, cm, m o g.')
   return {
     id: codeKey(code),
     data: {
@@ -200,6 +200,7 @@ export function applyStockChange(tx, ctx, item, delta, options = {}) {
     sku: item.data.sku, name: item.referenceData.name, delta,
     stockBefore, stockAfter,
     sourceType, sourceId, reason,
+    ...(options.date ? { date: businessDate(options.date) } : {}),
     createdAt: ctx.now, createdBy: ctx.uid,
   })
   // Keep repeated changes to a previously loaded item coherent without reads
@@ -209,10 +210,10 @@ export function applyStockChange(tx, ctx, item, delta, options = {}) {
   return { valueCents, stockAfter, movementId: movementRef.id, unvaluedQuantity: unknownAfter }
 }
 
-function recordInitialValue(tx, ctx, variantId, kind, valueCents, note) {
+function recordInitialValue(tx, ctx, variantId, kind, valueCents, note, date) {
   if (!valueCents) return
   journal(tx, ctx, {
-    sourceType: 'catalog_initial', sourceId: variantId, note,
+    sourceType: 'catalog_initial', sourceId: variantId, note, date,
     lines: [
       { account: INVENTORY_ACCOUNT[kind], debitCents: valueCents, creditCents: 0 },
       { account: '3105', debitCents: 0, creditCents: valueCents },
@@ -261,15 +262,35 @@ async function assertLegacyReference(tx, ctx, incoming, migratingIds = new Set()
   }
 }
 
-async function createCatalog(tx, ctx, payload) {
+function importHistory(value, kind, stock) {
+  if (value == null) return null
+  object(value, 'Historial de campo')
+  if (kind !== 'finished') fail('invalid-argument', 'El historial de campo corresponde a prendas.')
+  const entry = integer(value.entry, 'Entrada', 0, MAX_STOCK)
+  const exit = integer(value.exit, 'Salida', 0, entry)
+  if (entry - exit !== stock) fail('invalid-argument', 'El saldo debe coincidir con la entrada menos la salida.')
+  return {
+    date: businessDate(value.date), entry, exit,
+    paperCount: integer(value.paperCount, 'Conteo en papel'),
+    prototypeCount: integer(value.prototypeCount, 'Conteo del prototipo'),
+  }
+}
+
+function catalogInputs(ctx, payload) {
   object(payload, 'El producto')
   const incoming = header(payload.reference)
   const inputs = list(payload.variants, 'Las variantes').map(input => {
     const fields = variantFields(input, incoming.id)
     const stock = integer(input.stock ?? 0, 'Stock inicial', 0, MAX_STOCK)
-    const valueCents = acquisitionCost(ctx, input.unitCostCents, stock)
-    return { ref: ref(ctx, 'variants'), fields, stock, valueCents }
+    const history = importHistory(input.history, incoming.data.kind, stock)
+    const valueCents = acquisitionCost(ctx, input.unitCostCents, history?.entry ?? stock)
+    return { ref: ref(ctx, 'variants'), fields, stock, valueCents, history }
   })
+  return { incoming, inputs }
+}
+
+async function createCatalog(tx, ctx, payload) {
+  const { incoming, inputs } = catalogInputs(ctx, payload)
   const skus = inputs.map(item => item.fields.skuKey)
   const combinations = inputs.map(item => combinationKey(incoming.id, item.fields))
   if (new Set(skus).size !== skus.length) fail('already-exists', 'No repitas la misma variante.')
@@ -284,17 +305,48 @@ async function createCatalog(tx, ctx, payload) {
   if (indices.some(snapshot => snapshot.exists)) fail('already-exists', 'La combinación de talla, color y lote ya existe en el inventario.')
   if (legacy.size) fail('already-exists', 'Esta variante pertenece a un producto anterior. Migra ese producto antes de añadir variantes.')
   await assertLegacyReference(tx, ctx, incoming.data)
-  const referenceData = reference.exists ? reference.data() : incoming.data
-  if (!reference.exists) tx.set(referenceRef, { ...incoming.data, active: true, deleted: false, ...created(ctx) })
+  return writeCatalog(tx, ctx, incoming, inputs, reference.exists ? reference.data() : null)
+}
+
+export function seedCatalog(tx, ctx, payload) {
+  const { incoming, inputs } = catalogInputs(ctx, payload)
+  return writeCatalog(tx, ctx, incoming, inputs, null)
+}
+
+function writeCatalog(tx, ctx, incoming, inputs, existing) {
+  const referenceRef = ref(ctx, 'references', incoming.id)
+  const referenceData = existing ?? incoming.data
+  if (!existing) tx.set(referenceRef, { ...incoming.data, active: true, deleted: false, ...created(ctx) })
   for (const item of inputs) {
-    const data = { ...item.fields, skuAliases: [], referenceKey: incoming.id, kind: referenceData.kind, stock: 0, active: true, deleted: false, ...created(ctx) }
+    const data = {
+      ...item.fields, skuAliases: [], referenceKey: incoming.id, kind: referenceData.kind,
+      stock: 0, active: true, deleted: false, ...created(ctx),
+      ...(item.history ? { fieldReconciliation: {
+        date: item.history.date, paperCount: item.history.paperCount, prototypeCount: item.history.prototypeCount,
+      } } : {}),
+    }
     const costRef = ref(ctx, 'costs', item.ref.id)
+    const costData = { stockValueCents: 0, unvaluedQuantity: 0 }
     tx.set(item.ref, data)
-    tx.set(costRef, { stockValueCents: 0, unvaluedQuantity: 0, ...meta(ctx) })
+    tx.set(costRef, { ...costData, ...meta(ctx) })
     tx.set(indexRef(ctx, data.skuKey), { variantId: item.ref.id, ...created(ctx) })
     tx.set(combinationRef(ctx, incoming.id, data), { variantId: item.ref.id, referenceKey: incoming.id, ...created(ctx) })
-    if (item.stock) {
-      const result = applyStockChange(tx, ctx, { ref: item.ref, data, costRef, costData: { stockValueCents: 0, unvaluedQuantity: 0 }, referenceRef, referenceData }, item.stock, { sourceType: 'catalog_initial', sourceId: item.ref.id, reason: 'Existencia inicial', ...(item.valueCents === undefined ? {} : { valueCents: item.valueCents }) })
+    const stockItem = { ref: item.ref, data, costRef, costData, referenceRef, referenceData }
+    const acquisition = item.valueCents === undefined ? {} : { valueCents: item.valueCents }
+
+    if (item.history) {
+      const { date, entry, exit } = item.history
+      if (entry) applyStockChange(tx, ctx, stockItem, entry, {
+        date, sourceType: 'field_entry', sourceId: item.ref.id, reason: 'Entrada histórica de campo', ...acquisition,
+      })
+      if (exit) applyStockChange(tx, ctx, stockItem, -exit, {
+        date, sourceType: 'field_exit', sourceId: item.ref.id, reason: 'Salida histórica de campo',
+      })
+      recordInitialValue(tx, ctx, item.ref.id, data.kind, stockItem.costData.stockValueCents, `Saldo inicial de ${referenceData.name}`, date)
+    } else if (item.stock) {
+      const result = applyStockChange(tx, ctx, stockItem, item.stock, {
+        sourceType: 'catalog_initial', sourceId: item.ref.id, reason: 'Existencia inicial', ...acquisition,
+      })
       recordInitialValue(tx, ctx, item.ref.id, data.kind, result.valueCents, `Existencia inicial de ${referenceData.name} (${data.sku})`)
     }
   }

@@ -5,6 +5,7 @@ import { useAuth } from './hooks/useAuth'
 import { useOrgData } from './hooks/useOrgData'
 import { useOfflineQueue } from './hooks/useOfflineQueue'
 import { offlineActionAllowed, offlineActionLabel } from './lib/offlineQueue.js'
+import { movementDateText, newestMovementFirst } from './lib/movementView'
 import AuthPanel from './components/AuthPanel'
 import './App.css'
 
@@ -21,7 +22,6 @@ const panels = {
 }
 const adminTabs = [['summary', 'Resumen'], ['sales', 'Ventas'], ['purchases', 'Compras'], ['production', 'Producción'], ['finance', 'Finanzas'], ['people', 'Personal'], ['members', 'Usuarios'], ['audit', 'Auditoría']]
 const roleNames = { admin: 'Administrador', operator: 'Operador', seller: 'Vendedor', viewer: 'Usuario' }
-function date(value) { return value?.toDate ? value.toDate().toLocaleString('es-CO') : '—' }
 
 export default function App() {
   const auth = useAuth()
@@ -84,7 +84,7 @@ export default function App() {
     {notice && <p className="feedback is-success" role="status">{notice}</p>}
     <Suspense fallback={<p role="status">Cargando módulo…</p>}><div key={`${user.uid}:${member.role}`}>
       {activeTab === 'inventory' && <CatalogPanel data={data} run={run} role={member.role} busy={busyCount > 0} />}
-      {activeTab === 'movements' && <section className="inventory-panel"><div className="panel-toolbar"><div><h2>{member.role === 'operator' ? 'Tus movimientos de stock' : 'Movimientos de inventario'}</h2><p>{member.role === 'operator' ? 'Ingresos y movimientos realizados por tu cuenta, con fecha y documento de origen.' : 'Ingresos, ventas, ajustes y producción con su documento de origen.'}</p></div></div><div className="table-wrap"><table className="inventory-table"><thead><tr><th>Fecha</th><th>Producto</th><th>Cambio</th><th>Antes → después</th><th>Origen y responsable</th><th>Motivo</th></tr></thead><tbody>{[...data.movements].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).map(m => <tr key={m.id}><td>{date(m.createdAt)}</td><td>{m.name}</td><td>{m.delta > 0 ? '+' : ''}{m.delta}</td><td>{m.stockBefore} → {m.stockAfter}</td><td>{m.sourceType}<span className="product-sku">{m.sourceId} · {m.createdBy}</span></td><td>{m.reason || '—'}</td></tr>)}</tbody></table>{!data.movements.length && <p className="empty-state">Aún no hay movimientos registrados en el sistema de gestión.</p>}</div></section>}
+      {activeTab === 'movements' && <section className="inventory-panel"><div className="panel-toolbar"><div><h2>{member.role === 'operator' ? 'Tus movimientos de stock' : 'Movimientos de inventario'}</h2><p>{member.role === 'operator' ? 'Ingresos y movimientos realizados por tu cuenta, con fecha y documento de origen.' : 'Ingresos, ventas, ajustes y producción con su documento de origen.'}</p></div></div><div className="table-wrap"><table className="inventory-table"><thead><tr><th>Fecha</th><th>Producto</th><th>Cambio</th><th>Antes → después</th><th>Origen y responsable</th><th>Motivo</th></tr></thead><tbody>{[...data.movements].sort(newestMovementFirst).map(m => <tr key={m.id}><td>{movementDateText(m)}</td><td>{m.name}</td><td>{m.delta > 0 ? '+' : ''}{m.delta}</td><td>{m.stockBefore} → {m.stockAfter}</td><td>{m.sourceType}<span className="product-sku">{m.sourceId} · {m.createdBy}</span></td><td>{m.reason || '—'}</td></tr>)}</tbody></table>{!data.movements.length && <p className="empty-state">Aún no hay movimientos registrados en el sistema de gestión.</p>}</div></section>}
       {Panel && (online && data.privateLoading ? <p role="status">Sincronizando información del módulo con el servidor…</p> : <Panel data={data} run={run} role={member.role} busy={busyCount > 0 || data.loading || Boolean(data.error)} />)}
     </div></Suspense>
     <p className="storage-note">Empresa: {firebaseState.companyId}. Sin conexión puedes guardar ingresos, ajustes de conteo autorizados y ventas. El servidor los valida al sincronizar y conserva su historial.</p>

@@ -2,7 +2,7 @@ const SKU = /^[A-Za-z0-9._-]{1,40}$/
 const ID = /^[A-Za-z0-9_-]{1,128}$/
 const TEXT = { name: 100, description: 2000, category: 60, reference: 60, size: 20, color: 40, lot: 60, imageUrl: 500 }
 const NUMBERS = { price: 1e12, stock: 1e9, minStock: 1e9 }
-const ENUMS = { kind: ['finished', 'material'], unit: ['unidad', 'cm', 'g'] }
+const ENUMS = { kind: ['finished', 'material'], unit: ['unidad', 'cm', 'm', 'g'] }
 const ALLOWED = new Set(['v', 'type', 'id', 'sku', 'currency', ...Object.keys(TEXT), ...Object.keys(NUMBERS), ...Object.keys(ENUMS)])
 const fail = (message) => { throw new Error(message) }
 const unsafeControl = (text) => Array.from(text).some((character) => character.charCodeAt(0) < 32 && ![9, 10, 13].includes(character.charCodeAt(0)))
@@ -53,7 +53,7 @@ export function parseProductQr(text) {
     if (!values.includes(data[field])) fail(`El campo ${field} no es válido.`)
     result.fields[field] = data[field]
   }
-  if (data.unit && data.unit !== 'unidad' && data.kind !== 'material') fail('Los centímetros y gramos solo se admiten para materias primas.')
+  if (data.unit && data.unit !== 'unidad' && data.kind !== 'material') fail('Los centímetros, metros y gramos solo se admiten para materias primas.')
   if (Object.hasOwn(data, 'currency')) {
     if (data.currency !== 'COP') fail('La moneda del QR debe ser COP.')
     result.fields.currency = 'COP'

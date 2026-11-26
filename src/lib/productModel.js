@@ -54,7 +54,7 @@ export function normalizeProduct(input = {}) {
   product.kind = input.kind ?? 'finished'
   product.unit = input.unit ?? 'unidad'
   if (!['finished', 'material'].includes(product.kind)) throw new Error('El tipo debe ser producto terminado o materia prima.')
-  if (!['unidad', 'cm', 'g'].includes(product.unit) || (product.kind === 'finished' && product.unit !== 'unidad')) throw new Error('Los productos terminados se registran en unidades; las materias primas admiten unidades, centímetros o gramos.')
+  if (!['unidad', 'cm', 'm', 'g'].includes(product.unit) || (product.kind === 'finished' && product.unit !== 'unidad')) throw new Error('Los productos terminados se registran en unidades; las materias primas admiten unidades, centímetros, metros o gramos.')
   if (input.currency != null && input.currency !== 'COP') throw new Error('La moneda admitida es COP.')
   product.currency = 'COP'
   return product
